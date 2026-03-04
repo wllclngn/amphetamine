@@ -257,15 +257,19 @@ def configure_shader_cache():
 
 
 def configure_verbose():
-    """Handle --verbose flag: write/remove verbose_enabled flag file."""
+    """Handle --verbose / --no-verbose flags. Sticky: once enabled, stays
+    enabled until explicitly disabled with --no-verbose."""
     flag = STEAM_COMPAT_DIR / "verbose_enabled"
     if "--verbose" in sys.argv:
         STEAM_COMPAT_DIR.mkdir(parents=True, exist_ok=True)
         flag.write_text("1")
         log("INFO", "Verbose diagnostics enabled (~/.cache/amphetamine/*.prom)")
-    else:
+    elif "--no-verbose" in sys.argv:
         if flag.exists():
             flag.unlink()
+        log("INFO", "Verbose diagnostics disabled")
+    elif flag.exists():
+        log("INFO", "Verbose diagnostics: on (use --no-verbose to disable)")
 
 
 def main():
