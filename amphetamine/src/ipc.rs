@@ -50,6 +50,11 @@ pub struct Client {
     // File descriptors received via SCM_RIGHTS ancillary data.
     // Wine sends fds for process sockets, request/reply/wait pipes.
     pub inflight_fds: VecDeque<RawFd>,
+    // Server→client fd passing channel. Wine creates a socketpair during
+    // init_first_thread/init_thread and sends one end to the server.
+    // Used by send_fd() to push fds (e.g. ntsync device/object fds) to
+    // the client, which receives them via receive_fd() on its end.
+    pub wait_fd: Option<RawFd>,
 }
 
 impl Client {
@@ -60,6 +65,7 @@ impl Client {
             thread_id: 0,
             recv_buf: Vec::with_capacity(256),
             inflight_fds: VecDeque::with_capacity(4),
+            wait_fd: None,
         }
     }
 
@@ -144,6 +150,45 @@ impl Client {
         out.extend(self.recv_buf.drain(..total));
     }
 
+    // Send an fd to the client via SCM_RIGHTS on the wait_fd channel.
+    // Wine's receive_fd() expects: data = obj_handle_t (4 bytes), ancillary = fd.
+    pub fn send_fd(&self, fd: RawFd, handle: u32) -> bool {
+        let wait_fd = match self.wait_fd {
+            Some(wfd) => wfd,
+            None => return false,
+        };
+
+        let handle_bytes = handle.to_le_bytes();
+        let mut iov = libc::iovec {
+            iov_base: handle_bytes.as_ptr() as *mut _,
+            iov_len: handle_bytes.len(),
+        };
+
+        let cmsg_space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+        let mut cmsg_buf = vec![0u8; cmsg_space];
+
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = cmsg_buf.as_mut_ptr() as *mut _;
+        msg.msg_controllen = cmsg_space as _;
+
+        unsafe {
+            let cmsg = libc::CMSG_FIRSTHDR(&msg);
+            (*cmsg).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+            (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+            std::ptr::copy_nonoverlapping(
+                &fd as *const RawFd as *const u8,
+                libc::CMSG_DATA(cmsg),
+                std::mem::size_of::<RawFd>(),
+            );
+
+            let n = libc::sendmsg(wait_fd, &msg, 0);
+            n > 0
+        }
+    }
+
     // Write a reply to the client socket.
     pub fn write_reply(&self, reply: &crate::event_loop::Reply) -> isize {
         match reply {
@@ -163,6 +208,9 @@ const HEADER_SIZE: usize = 12;
 
 impl Drop for Client {
     fn drop(&mut self) {
+        if let Some(wfd) = self.wait_fd {
+            unsafe { libc::close(wfd); }
+        }
         for &fd in &self.inflight_fds {
             unsafe { libc::close(fd); }
         }

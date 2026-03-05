@@ -802,8 +802,6 @@ fn build_env_vars(
         ("PATH", format!("{}:{}", wine_bin.display(), cur_path)),
         ("LD_LIBRARY_PATH", ld_path),
         ("WINEDEBUG", if trace { "+server,+timestamp".into() } else { "-all".into() }),
-        ("WINEFSYNC", "1".into()),
-        ("WINEESYNC", "1".into()),
         ("WINEDLLOVERRIDES", dll_overrides),
         ("DXVK_LOG_LEVEL", "none".into()),
         ("VKD3D_DEBUG", "none".into()),
@@ -818,6 +816,22 @@ fn build_env_vars(
         // SPIR-V pipelines persist across runs.
         ("VKD3D_CONFIG", "shader_cache".into()),
     ];
+
+    // Sync primitive priority: ntsync > fsync > esync
+    // ntsync (Linux 6.14+): kernel-native NT sync via /dev/ntsync ioctls.
+    //   Wine's ntdll talks to /dev/ntsync directly (client-side), bypassing
+    //   the wineserver. triskelion also uses ntsync server-side for select waits.
+    // fsync/esync: Wine userspace sync that bypasses the wineserver. triskelion
+    //   rejects these with STATUS_NOT_IMPLEMENTED to force server-based sync,
+    //   so only enable them as a last resort when ntsync isn't available.
+    if Path::new("/dev/ntsync").exists() {
+        vars.push(("WINE_NTSYNC", "1".into()));
+        vars.push(("WINEFSYNC", "0".into()));
+        vars.push(("WINEESYNC", "0".into()));
+    } else {
+        vars.push(("WINEFSYNC", "1".into()));
+        vars.push(("WINEESYNC", "1".into()));
+    }
 
     // Steam Input: SDL 2.30+ reads SteamVirtualGamepadInfo to configure
     // virtual gamepads. Steam sets SteamVirtualGamepadInfo_Proton before

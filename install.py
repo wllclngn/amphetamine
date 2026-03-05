@@ -18,6 +18,8 @@ STEAM_COMPAT_DIR = Path.home() / ".local" / "share" / "Steam" / "compatibilityto
 WINE_CLONE_URL = "https://github.com/ValveSoftware/wine.git"
 WINE_CLONE_BRANCH = "proton_10.0"
 
+CACHYOS_WINE_URL = "https://github.com/CachyOS/wine-cachyos.git"
+
 
 def get_version():
     """Read version from amphetamine/Cargo.toml."""
@@ -134,10 +136,96 @@ def build_triskelion():
     return 0
 
 
-def clone_wine():
+def detect_cachyos_wine():
+    """Detect if CachyOS Proton/Wine is installed."""
+    # Check common CachyOS Proton installation paths
+    cachyos_paths = [
+        Path("/usr/share/steam/compatibilitytools.d/proton-cachyos"),
+        Path.home() / ".steam" / "root" / "compatibilitytools.d" / "proton-cachyos",
+        Path.home() / ".local" / "share" / "Steam" / "compatibilitytools.d" / "proton-cachyos",
+    ]
+    for p in cachyos_paths:
+        if p.exists():
+            log("INFO", f"CachyOS Wine detected: {p}")
+            return True
+
+    # Check via pacman (CachyOS is Arch-based)
+    try:
+        ret = subprocess.run(
+            ["pacman", "-Q", "proton-cachyos"],
+            capture_output=True, text=True
+        )
+        if ret.returncode == 0:
+            log("INFO", f"CachyOS Wine detected: {ret.stdout.strip()}")
+            return True
+    except FileNotFoundError:
+        pass
+
+    return False
+
+
+def get_cachyos_latest_branch():
+    """Find the latest cachyos_10.0_*/main branch from remote."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--heads", CACHYOS_WINE_URL],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            return None
+
+        branches = []
+        for line in result.stdout.splitlines():
+            ref = line.split("\t")[1] if "\t" in line else ""
+            ref = ref.replace("refs/heads/", "")
+            if ref.startswith("cachyos_10.0_") and ref.endswith("/main"):
+                branches.append(ref)
+
+        if branches:
+            branches.sort()
+            return branches[-1]  # Latest by date
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def clone_wine(use_cachyos=False):
+    # Check if existing source matches desired type
+    marker = WINE_SRC_DIR / ".amphetamine_source"
     if (WINE_SRC_DIR / "dlls").exists():
-        log("INFO", f"Wine source exists: {WINE_SRC_DIR}")
-        return
+        current_source = marker.read_text().strip() if marker.exists() else "valve"
+        if use_cachyos and current_source != "cachyos":
+            log("INFO", "Switching wine source from Valve to CachyOS...")
+            shutil.rmtree(WINE_SRC_DIR)
+        elif not use_cachyos and current_source == "cachyos":
+            log("INFO", "Switching wine source from CachyOS to Valve...")
+            shutil.rmtree(WINE_SRC_DIR)
+        else:
+            log("INFO", f"Wine source exists: {WINE_SRC_DIR} ({current_source})")
+            return
+
+    if use_cachyos:
+        branch = get_cachyos_latest_branch()
+        if not branch:
+            log("WARN", "Could not find CachyOS Wine branch, falling back to Valve Wine")
+            use_cachyos = False
+        else:
+            log("INFO", f"Cloning CachyOS Wine ({branch}) to {WINE_SRC_DIR}")
+            WINE_SRC_DIR.parent.mkdir(parents=True, exist_ok=True)
+            ret = subprocess.run([
+                "git", "clone", "--depth", "1", "-b", branch,
+                CACHYOS_WINE_URL, str(WINE_SRC_DIR),
+            ]).returncode
+            if ret != 0:
+                log("ERROR", "CachyOS Wine clone failed, falling back to Valve Wine")
+                if WINE_SRC_DIR.exists():
+                    shutil.rmtree(WINE_SRC_DIR)
+                use_cachyos = False
+            else:
+                marker.write_text("cachyos")
+                log("INFO", "CachyOS Wine clone complete")
+                return
+
     log("INFO", f"Cloning Valve Wine ({WINE_CLONE_BRANCH}) to {WINE_SRC_DIR}")
     WINE_SRC_DIR.parent.mkdir(parents=True, exist_ok=True)
     ret = subprocess.run([
@@ -147,6 +235,7 @@ def clone_wine():
     if ret != 0:
         log("ERROR", "git clone failed (GitHub may be down, retry later)")
         return
+    marker.write_text("valve")
     log("INFO", "Clone complete")
 
 
@@ -220,13 +309,19 @@ def patch_win32u_message():
     text = text.replace(func_anchor, func_anchor + WIN32U_FUNCTION)
 
     # Modification B: prepend triskelion check to peek_message condition
-    # Original line starts with "        if (!filter->waited && NtGetTickCount()"
-    peek_anchor = "        if (!filter->waited && NtGetTickCount() - thread_info->last_getmsg_time < 3000"
-    if peek_anchor not in text:
-        log("ERROR", f"Anchor not found in {path}: {peek_anchor!r}")
+    # Valve Wine:  "if (!filter->waited && NtGetTickCount() ..."
+    # CachyOS Wine: "if ((using_server_or_ntsync() || !filter->waited) && NtGetTickCount() ..."
+    valve_anchor = "!filter->waited && NtGetTickCount() - thread_info->last_getmsg_time < 3000"
+    cachyos_anchor = "(using_server_or_ntsync() || !filter->waited) && NtGetTickCount() - thread_info->last_getmsg_time < 3000"
+
+    if cachyos_anchor in text:
+        original_condition = cachyos_anchor
+    elif valve_anchor in text:
+        original_condition = valve_anchor
+    else:
+        log("ERROR", f"Anchor not found in {path}: peek_message condition")
         sys.exit(1)
-    # Replace the original "if (" with comment + triskelion check + original condition as continuation
-    original_condition = "!filter->waited && NtGetTickCount() - thread_info->last_getmsg_time < 3000"
+
     text = text.replace(
         "        if (" + original_condition,
         PEEK_MSG_PREFIX + original_condition,
@@ -353,7 +448,14 @@ def main():
     if not check_dependencies():
         return 1
 
-    clone_wine()
+    use_cachyos = detect_cachyos_wine()
+    if use_cachyos:
+        print()
+        log("INFO", "amphetamine has detected CachyOS Wine.")
+        log("INFO", "Compiling triskelion with CachyOS ntsync protocol support...")
+        print()
+
+    clone_wine(use_cachyos=use_cachyos)
 
     ret = build_triskelion()
     if ret != 0:

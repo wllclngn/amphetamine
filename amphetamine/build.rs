@@ -165,6 +165,9 @@ fn main() {
         }
     }
 
+    // Declare custom cfg so rustc doesn't warn about unknown condition
+    println!("cargo::rustc-check-cfg=cfg(has_cachyos_ntsync)");
+
     // Re-run if these change
     println!("cargo:rerun-if-env-changed=WINE_SRC");
     println!("cargo:rerun-if-changed=src/protocol_generated.rs.fallback");
@@ -251,6 +254,13 @@ fn generate_from_wine_src(wine_root: &Path) -> String {
     } else {
         vec![]
     };
+
+    // Auto-detect CachyOS ntsync protocol extensions
+    let has_cachyos = requests.iter().any(|r| r.name == "get_linux_sync_device");
+    if has_cachyos {
+        println!("cargo:rustc-cfg=has_cachyos_ntsync");
+        println!("cargo:warning=  CachyOS ntsync protocol opcodes detected — enabling client-side ntsync support");
+    }
 
     // 1. RequestCode enum + from_i32() + as_str()
     let variants: Vec<(String, i32)> = requests.iter().map(|r| (r.name.clone(), r.index)).collect();

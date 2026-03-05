@@ -53,7 +53,7 @@ pub struct EventLoop {
     thread_init_count: u64,
     // ntsync: kernel-native NT sync (None = older kernel, fallback to stubs)
     ntsync: Option<crate::ntsync::NtsyncDevice>,
-    ntsync_objects: HashMap<obj_handle_t, crate::ntsync::NtsyncObj>,
+    ntsync_objects: HashMap<obj_handle_t, (crate::ntsync::NtsyncObj, u32)>,
     ntsync_objects_created: u64,
 }
 
@@ -460,12 +460,15 @@ impl RequestHandler for EventLoop {
             return reply_fixed(&ReplyHeader { error: 0xC000000D, reply_size: 0 });
         };
 
-        // Drain 2 inflight fds (reply_fd, wait_fd) — consume and close
+        // Drain 2 inflight fds: reply_fd (close) and wait_fd (keep for fd passing)
         if let Some(client) = self.clients.get_mut(&(client_fd as RawFd)) {
-            for _ in 0..2 {
-                if let Some(fd) = client.take_inflight_fd() {
-                    unsafe { libc::close(fd); }
-                }
+            // First fd: reply_fd — unused in triskelion
+            if let Some(fd) = client.take_inflight_fd() {
+                unsafe { libc::close(fd); }
+            }
+            // Second fd: wait_fd — server→client fd passing channel (ntsync)
+            if let Some(fd) = client.take_inflight_fd() {
+                client.wait_fd = Some(fd);
             }
         }
 
@@ -510,12 +513,15 @@ impl RequestHandler for EventLoop {
             return reply_fixed(&ReplyHeader { error: 0xC000000D, reply_size: 0 });
         };
 
-        // Drain 2 inflight fds (reply_fd, wait_fd) — consume and close
+        // Drain 2 inflight fds: reply_fd (close) and wait_fd (keep for fd passing)
         if let Some(client) = self.clients.get_mut(&(client_fd as RawFd)) {
-            for _ in 0..2 {
-                if let Some(fd) = client.take_inflight_fd() {
-                    unsafe { libc::close(fd); }
-                }
+            // First fd: reply_fd — unused in triskelion
+            if let Some(fd) = client.take_inflight_fd() {
+                unsafe { libc::close(fd); }
+            }
+            // Second fd: wait_fd — server→client fd passing channel (ntsync)
+            if let Some(fd) = client.take_inflight_fd() {
+                client.wait_fd = Some(fd);
             }
         }
 
@@ -971,7 +977,7 @@ impl RequestHandler for EventLoop {
                         let handle = u32::from_le_bytes([
                             buf[off], buf[off + 1], buf[off + 2], buf[off + 3],
                         ]);
-                        if let Some(obj) = self.ntsync_objects.get(&handle) {
+                        if let Some((obj, _)) = self.ntsync_objects.get(&handle) {
                             ntsync_fds.push(obj.fd());
                         } else {
                             all_have_ntsync = false;
@@ -1087,7 +1093,8 @@ impl RequestHandler for EventLoop {
         if handle != 0 {
             if let Some(ntsync) = &self.ntsync {
                 if let Some(obj) = ntsync.create_event(manual_reset, initial_state) {
-                    self.ntsync_objects.insert(handle, obj);
+                    let sync_type = if manual_reset { 4u32 } else { 3u32 }; // MANUAL_EVENT=4, AUTO_EVENT=3
+                    self.ntsync_objects.insert(handle, (obj, sync_type));
                     self.ntsync_objects_created += 1;
                 }
             }
@@ -1106,7 +1113,7 @@ impl RequestHandler for EventLoop {
             let req: EventOpRequest = unsafe {
                 std::ptr::read_unaligned(buf.as_ptr() as *const _)
             };
-            if let Some(obj) = self.ntsync_objects.get(&req.handle) {
+            if let Some((obj, _)) = self.ntsync_objects.get(&req.handle) {
                 // Wine event_op codes: PULSE_EVENT=0, SET_EVENT=1, RESET_EVENT=2
                 let prev = match req.op {
                     1 => obj.event_set().unwrap_or(0),
@@ -1182,7 +1189,7 @@ impl RequestHandler for EventLoop {
             if let Some(ntsync) = &self.ntsync {
                 let (owner, count) = if owned { (tid, 1) } else { (0, 0) };
                 if let Some(obj) = ntsync.create_mutex(owner, count) {
-                    self.ntsync_objects.insert(handle, obj);
+                    self.ntsync_objects.insert(handle, (obj, 2)); // MUTEX=2
                     self.ntsync_objects_created += 1;
                 }
             }
@@ -1218,7 +1225,7 @@ impl RequestHandler for EventLoop {
         if handle != 0 {
             if let Some(ntsync) = &self.ntsync {
                 if let Some(obj) = ntsync.create_sem(initial, max) {
-                    self.ntsync_objects.insert(handle, obj);
+                    self.ntsync_objects.insert(handle, (obj, 1)); // SEMAPHORE=1
                     self.ntsync_objects_created += 1;
                 }
             }
@@ -1237,7 +1244,7 @@ impl RequestHandler for EventLoop {
             let req: ReleaseSemaphoreRequest = unsafe {
                 std::ptr::read_unaligned(buf.as_ptr() as *const _)
             };
-            if let Some(obj) = self.ntsync_objects.get(&req.handle) {
+            if let Some((obj, _)) = self.ntsync_objects.get(&req.handle) {
                 match obj.sem_release(req.count) {
                     Ok(prev) => {
                         self.arm_timer_immediate();
@@ -1265,7 +1272,7 @@ impl RequestHandler for EventLoop {
             let req: ReleaseMutexRequest = unsafe {
                 std::ptr::read_unaligned(buf.as_ptr() as *const _)
             };
-            if let Some(obj) = self.ntsync_objects.get(&req.handle) {
+            if let Some((obj, _)) = self.ntsync_objects.get(&req.handle) {
                 let tid = self.client_thread_id(client_fd as RawFd).unwrap_or(0);
                 match obj.mutex_unlock(tid) {
                     Ok(prev) => {
@@ -1304,6 +1311,97 @@ impl RequestHandler for EventLoop {
             _pad_0: [0; 4],
         };
         reply_fixed(&reply)
+    }
+
+    // ── CachyOS ntsync client-side protocol handlers ─────────────────────
+
+    #[cfg(has_cachyos_ntsync)]
+    fn handle_get_linux_sync_device(&mut self, client_fd: i32, _buf: &[u8]) -> Reply {
+        use crate::protocol::GetLinuxSyncDeviceReply;
+
+        let pid = self.clients.get(&(client_fd as RawFd))
+            .and_then(|c| if c.process_id != 0 { Some(c.process_id) } else { None });
+        let handle = if let Some(pid) = pid {
+            if let Some(process) = self.state.processes.get_mut(&pid) {
+                process.handles.allocate(0, 0x001F0003)
+            } else { 0 }
+        } else { 0 };
+
+        // Send /dev/ntsync fd to client via wait_fd channel
+        if handle != 0 {
+            if let Some(ntsync) = &self.ntsync {
+                let ntsync_fd = ntsync.fd();
+                if let Some(client) = self.clients.get(&(client_fd as RawFd)) {
+                    client.send_fd(ntsync_fd, handle);
+                }
+            }
+        }
+
+        let reply = GetLinuxSyncDeviceReply {
+            header: ReplyHeader { error: 0, reply_size: 0 },
+            handle,
+            _pad_0: [0; 4],
+        };
+        reply_fixed(&reply)
+    }
+
+    #[cfg(has_cachyos_ntsync)]
+    fn handle_get_linux_sync_obj(&mut self, client_fd: i32, buf: &[u8]) -> Reply {
+        use crate::protocol::GetLinuxSyncObjRequest;
+        use crate::protocol::GetLinuxSyncObjReply;
+
+        let req = if buf.len() >= std::mem::size_of::<GetLinuxSyncObjRequest>() {
+            unsafe { std::ptr::read_unaligned(buf.as_ptr() as *const GetLinuxSyncObjRequest) }
+        } else {
+            return reply_fixed(&ReplyHeader { error: 0xC000000D, reply_size: 0 });
+        };
+
+        // Look up the ntsync object by handle and get its fd + type
+        if let Some((obj, sync_type)) = self.ntsync_objects.get(&req.handle) {
+            let obj_fd = obj.fd();
+
+            // Allocate a new handle for the inproc_sync wrapper
+            let pid = self.clients.get(&(client_fd as RawFd))
+                .and_then(|c| if c.process_id != 0 { Some(c.process_id) } else { None });
+            let new_handle = if let Some(pid) = pid {
+                if let Some(process) = self.state.processes.get_mut(&pid) {
+                    process.handles.allocate(0, 0x001F0003)
+                } else { 0 }
+            } else { 0 };
+
+            if new_handle != 0 {
+                if let Some(client) = self.clients.get(&(client_fd as RawFd)) {
+                    client.send_fd(obj_fd, new_handle);
+                }
+            }
+
+            let reply = GetLinuxSyncObjReply {
+                header: ReplyHeader { error: 0, reply_size: 0 },
+                handle: new_handle,
+                r#type: *sync_type as i32,
+                access: 0x001F0003,
+                _pad_0: [0; 4],
+            };
+            return reply_fixed(&reply);
+        }
+
+        reply_fixed(&ReplyHeader { error: 0xC0000008, reply_size: 0 }) // STATUS_INVALID_HANDLE
+    }
+
+    #[cfg(has_cachyos_ntsync)]
+    fn handle_select_inproc_queue(&mut self, _client_fd: i32, _buf: &[u8]) -> Reply {
+        reply_fixed(&ReplyHeader { error: 0, reply_size: 0 })
+    }
+
+    #[cfg(has_cachyos_ntsync)]
+    fn handle_unselect_inproc_queue(&mut self, _client_fd: i32, _buf: &[u8]) -> Reply {
+        reply_fixed(&ReplyHeader { error: 0, reply_size: 0 })
+    }
+
+    #[cfg(has_cachyos_ntsync)]
+    fn handle_get_inproc_alert_event(&mut self, _client_fd: i32, _buf: &[u8]) -> Reply {
+        // STATUS_NOT_IMPLEMENTED — Wine falls back to server-side alerting
+        reply_fixed(&ReplyHeader { error: 0xC0000002, reply_size: 0 })
     }
 }
 

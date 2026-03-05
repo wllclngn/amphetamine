@@ -141,6 +141,8 @@ pub struct NtsyncDevice {
 }
 
 impl NtsyncDevice {
+    pub fn fd(&self) -> RawFd { self.fd }
+
     /// Try to open /dev/ntsync. Returns None if device doesn't exist.
     pub fn open() -> Option<Self> {
         let path = b"/dev/ntsync\0";
