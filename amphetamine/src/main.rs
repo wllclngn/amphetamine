@@ -27,6 +27,7 @@ mod pe_patch;
 mod protocol;
 mod queue;
 mod sync;
+mod ntsync;
 mod objects;
 mod registry;
 mod event_loop;

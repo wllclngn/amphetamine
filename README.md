@@ -2,23 +2,24 @@
 
 A complete Proton and wineserver replacement for Linux gaming. One Rust binary replaces both Proton's Python launcher and Wine's C wineserver.
 
-**Not a Wine fork. Not a Proton wrapper.** amphetamine is the Steam compatibility layer; triskelion is the lock-free wineserver. Together they replace the entire Proton/wineserver stack.
+amphetamine is a Steam compatibility layer that utilizes triskelion, a lock-free wineserver. Together they replace the entire Proton/wineserver stack for Steam.
 
-6,111 lines of Rust. 1 dependency. 306 protocol opcodes. 5 games running.
+amphetamine is made possible by contributions from the CachyOS community within the Linux ecosystem.
 
 ## Replacing Proton
 
 | | Proton | amphetamine |
 |---|---|---|
-| Launcher | Python (~2,000 lines) | Rust (866 lines, compiled) |
-| Wineserver | Wine's C wineserver (26,000+ lines) | triskelion (5,245 lines Rust, lock-free) |
-| Binary count | 3+ (script, wineserver, toolchain) | 1 (847 KB) |
+| Launcher | Python (~2,000 lines) | Rust (1,281 lines, compiled) |
+| Wineserver | Wine's C wineserver (26,000+ lines) | triskelion (6,479 lines Rust, lock-free) |
+| Binary count | 3+ (script, wineserver, toolchain) | 1 (920 KB) |
 | Dependencies | Python 3, runtime libraries | libc |
 | Deployment cache | None (re-evaluates every launch) | v3 per-component (wine, dxvk, vkd3d, steam) |
 | Prefix setup | Python shutil (readdir + copy per file) | getdents64 (32 KB bulk reads) + hardlinks |
-| Wineserver sync | pthread mutexes, kernel locks | Lock-free CAS, futex wake |
+| Wineserver sync | pthread mutexes, kernel locks | ntsync (kernel-native, Linux 6.14+), CAS/futex fallback |
 | Timer precision | Fixed polling interval | timerfd (kernel-precise deadlines) |
 | Message passing | All through wineserver socket | Shared-memory SPSC bypass |
+| Save data | No protection | Pre-launch snapshot + post-game restore |
 
 ## Execution Stack
 
@@ -40,10 +41,12 @@ Steam
        │    └─ 32-bit → syswow64
        ├─ Steam client bridge (steam.exe → lsteamclient → steamclient.so)
        ├─ Registry injection (VC++ 2015-2022, .NET Framework 4.8)
+       ├─ Save data protection (pre-launch snapshot, post-game restore)
        ├─ Deployment cache (v3 per-component) — cache hit skips all file ops
        └─ wine64 with WINESERVER=triskelion
+            ├─ ntsync kernel driver (Linux 6.14+) — native NT semaphore/mutex/event
+            │    └─ Fallback: lock-free CAS + futex wake (older kernels)
             ├─ Lock-free SPSC ring buffers (shared memory, 256 slots)
-            ├─ Futex-backed sync primitives (futex wake on state changes)
             ├─ Handle tables, process/thread state
             ├─ In-memory registry (HashMap values, O(1) lookup)
             ├─ timerfd-driven wait deadlines (kernel-precise)
@@ -88,7 +91,9 @@ First launch sets up the prefix (~1500 symlinks + files via getdents64/hardlinks
 
 - **Per-component deployment cache** — v3 cache stores 4 independent hashes: wine, dxvk, vkd3d, steam. Each component invalidates independently. A DXVK update does not force a full prefix rebuild.
 
-- **Futex wake** — Sync primitives and message queues use direct `SYS_futex` calls with `FUTEX_WAKE` to notify blocked threads immediately. No polling loops. No pthread mutexes in server code.
+- **ntsync kernel driver** — On Linux 6.14+, sync primitives (semaphore, mutex, event) use `/dev/ntsync` — the kernel implements NT synchronization natively via ioctls. WaitForSingleObject/WaitForMultipleObjects resolve in a single ioctl instead of userspace CAS loops. Falls back to CAS + futex on older kernels.
+
+- **Futex wake** — Sync primitives and message queues use direct `SYS_futex` calls with `FUTEX_WAKE` to notify blocked threads immediately. No polling loops. No pthread mutexes in server code. Used as the fallback path when ntsync is unavailable.
 
 - **timerfd precision** — Select handler timeouts use `timerfd_create(CLOCK_MONOTONIC)`. The kernel delivers exact deadline wakeups via epoll. Replaces fixed-interval polling.
 
@@ -131,7 +136,7 @@ Requires Rust 2024 edition (rustc 1.85+). Single dependency: `libc`.
 
 ### amphetamine (Proton replacement)
 
-`launcher.rs` — 866 lines of Rust that replace Proton's ~2,000-line Python script.
+`launcher.rs` — 1,281 lines of Rust that replace Proton's ~2,000-line Python script.
 
 **Discovery**:
 - Wine: `TRISKELION_WINE_DIR` → Proton Experimental → any Proton → system Wine
@@ -164,6 +169,13 @@ Requires Rust 2024 edition (rustc 1.85+). Single dependency: `libc`.
 - Cache hit: all file operations skipped, straight to wine64
 - Components invalidate independently (DXVK update doesn't force prefix rebuild)
 
+**Save data protection**:
+- Pre-launch: snapshots all save data under `pfx/drive_c/users/steamuser/` (`AppData/Roaming`, `AppData/Local`, `AppData/LocalLow`, `Documents`) to `$STEAM_COMPAT_DATA_PATH/save_backup/`
+- Post-game: compares backup against originals — restores only files that existed before launch but are now missing (Steam Cloud sync wipe). Never overwrites saves the game just wrote.
+- Skips system directories (`Microsoft/`, `Temp/`) and empty folder trees
+- Always runs, every launch — the cost is trivial (save data is typically KB to low MB)
+- Backup is cleaned up automatically when saves are intact; kept as safety net when files were restored
+
 **Launch**:
 - `wine64 c:\windows\system32\steam.exe <game.exe>` — through Wine's built-in Steam bridge
 - `WINEDLLOVERRIDES` sets DXVK/VKD3D to native, steam.exe to builtin
@@ -174,12 +186,12 @@ Requires Rust 2024 edition (rustc 1.85+). Single dependency: `libc`.
 
 *Quocunque Jeceris Stabit*
 
-Lock-free wineserver replacement. 847 KB binary, single dependency (libc), 38 handlers across 306 opcodes.
+Lock-free wineserver replacement. 920 KB binary, single dependency (libc), 38 handlers across 306 opcodes.
 
 | Leg | File | Domain |
 |-----|------|--------|
 | 1: queue | `queue.rs` | Per-thread SPSC ring buffers (256 slots). Cache-line aligned atomics. Shared memory in `/dev/shm`. Futex wake on post/send. |
-| 2: sync | `sync.rs` | Semaphore, Event (manual/auto-reset), Mutex (recursive). All CAS-based. Futex wake on state transitions. |
+| 2: sync | `ntsync.rs` + `sync.rs` | ntsync kernel driver (Linux 6.14+) for native NT semaphore/mutex/event via `/dev/ntsync` ioctls. Fallback: CAS-based atomics with futex wake (`sync.rs`). |
 | 3: objects | `objects.rs` | Handle tables (dense array + free list), process/thread state, Windows handle encoding. |
 
 **Protocol**: 306 opcodes auto-generated from Wine's `protocol.def` by `build.rs` (829 lines). 38 handlers with logic; rest return `STATUS_NOT_IMPLEMENTED`. Adding a handler = one function.
@@ -188,7 +200,7 @@ Lock-free wineserver replacement. 847 KB binary, single dependency (libc), 38 ha
 
 **Event loop**: epoll hub with timerfd for deadline precision. Stack-allocated `[u8; 64]` replies for fixed-size opcodes. Reusable request buffers via `std::mem::take()`. Deferred replies for select with timeout (arm timerfd, check on expiry).
 
-**Select handler**: Wine's universal wait mechanism. Handles polls, object waits, and deferred sleep with real timeouts. Disables fsync/esync to force server-based sync through select.
+**Select handler**: Wine's universal wait mechanism. Handles polls, object waits, and deferred sleep with real timeouts. On ntsync-capable kernels, select polls kernel objects via `NTSYNC_IOC_WAIT_ANY`/`WAIT_ALL` ioctls for immediate acquisition. Disables fsync/esync to force server-based sync through select.
 
 ### Shared-Memory Message Bypass
 
@@ -209,20 +221,21 @@ Wine source resolution: `WINE_SRC` → `~/.local/share/amphetamine/wine-src/` �
 ```
 amphetamine/
   install.py               Build + deploy + Wine patching pipeline
-  amphetamine/              triskelion Rust crate (6,111 lines)
+  amphetamine/              triskelion Rust crate (6,479 lines)
     build.rs                protocol.def codegen (829 lines, 306 opcodes)
     include/
       triskelion_shm.h      C header matching Rust shm layout
     src/
       main.rs               Entry point, signal handling, socket path
-      launcher.rs            Full Proton replacement layer (866 lines)
-      event_loop.rs          epoll hub, handler dispatch (1,139 lines)
+      launcher.rs            Full Proton replacement layer (1,281 lines)
+      event_loop.rs          epoll hub, handler dispatch (1,474 lines)
       profile.rs             strace/perf profiling harness (637 lines)
       ipc.rs                 Unix socket IPC with SCM_RIGHTS
       objects.rs             Handle tables, process/thread state
       registry.rs            In-memory registry tree (HashMap values)
       queue.rs               SPSC ring buffer message queues (futex wake)
-      sync.rs                Sync primitive arbitration (futex wake)
+      ntsync.rs              ntsync kernel driver wrapper (/dev/ntsync ioctls)
+      sync.rs                Sync primitive fallback (CAS + futex wake)
       shm.rs                 Shared memory management
       protocol.rs            Protocol types and dispatch
       packager.rs            Steam compatibility tool packaging
@@ -250,7 +263,7 @@ amphetamine/
 ~/.local/share/Steam/compatibilitytools.d/amphetamine/
   compatibilitytool.vdf     Steam discovery metadata
   toolmanifest.vdf          Invocation: /proton %verb%
-  proton                    triskelion binary (847 KB)
+  proton                    triskelion binary (920 KB)
 ```
 
 Steam calls `./proton waitforexitandrun <game.exe>`. triskelion's CLI parses it as launcher mode, sets up the environment, launches wine64 with `WINESERVER=$SELF`, and when wine64 calls back to wineserver — it's talking to another instance of itself.

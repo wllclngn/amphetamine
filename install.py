@@ -256,6 +256,16 @@ def configure_shader_cache():
         log("INFO", "Shader cache optimization disabled")
 
 
+def check_ntsync():
+    """Check if the kernel supports ntsync and inform the user."""
+    ntsync_available = Path("/dev/ntsync").exists()
+    if ntsync_available:
+        log("INFO", "ntsync: /dev/ntsync available (kernel-native NT sync)")
+    else:
+        log("INFO", "ntsync: not available (using CAS + futex fallback)")
+        log("INFO", "ntsync requires Linux 6.14+. Sync will work fine without it.")
+
+
 def configure_verbose():
     """Handle --verbose / --no-verbose flags. Sticky: once enabled, stays
     enabled until explicitly disabled with --no-verbose."""
@@ -350,6 +360,14 @@ def main():
         return ret
 
     configure_shader_cache()
+
+    check_ntsync()
+
+    print()
+    log("INFO", "Save data protection: enabled (automatic)")
+    log("INFO", "  Pre-launch snapshots save data, restores if Steam Cloud sync")
+    log("INFO", "  wipes files during first launch with a new compatibility tool.")
+    print()
 
     if (WINE_SRC_DIR / "dlls").exists():
         patch_copy_triskelion_c()

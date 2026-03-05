@@ -204,6 +204,9 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
 
         log_info!("launching: {game_exe}");
 
+        // Save data protection: snapshot before launch
+        let save_backup = snapshot_save_data(&pfx);
+
         let mut cmd = Command::new(&wine64);
         // Launch through Wine's built-in steam.exe bridge for Steam client connection
         cmd.arg("c:\\windows\\system32\\steam.exe");
@@ -213,7 +216,8 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
             cmd.env(k, v);
         }
 
-        if trace {
+        // Capture stderr: trace mode → opcode trace file, verbose → crash log
+        let stderr_log_path = if trace {
             if let Err(e) = std::fs::create_dir_all("/tmp/amphetamine") {
                 log_warn!("Cannot create trace dir: {e}");
             }
@@ -222,12 +226,64 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
                 Ok(f) => { cmd.stderr(std::process::Stdio::from(f)); }
                 Err(e) => log_warn!("Tracing enabled but cannot create {}: {e}", trace_file.display()),
             }
-        }
+            None
+        } else if crate::log::is_verbose() {
+            let log_dir = crate::log::log_dir();
+            let _ = std::fs::create_dir_all(&log_dir);
+            let ts = crate::log::filename_timestamp();
+            let path = log_dir.join(format!("stderr-{ts}.log"));
+            match std::fs::File::create(&path) {
+                Ok(f) => {
+                    cmd.stderr(std::process::Stdio::from(f));
+                    Some(path)
+                }
+                Err(e) => {
+                    log_warn!("Cannot create stderr log: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         let status = cmd.status().unwrap_or_else(|e| {
             log_error!("Failed to exec wine64: {e}");
             std::process::exit(1);
         });
+
+        // Update stderr symlink and log exit status
+        if let Some(ref log_path) = stderr_log_path {
+            let log_dir = crate::log::log_dir();
+            let link = log_dir.join("stderr-latest.log");
+            let _ = std::fs::remove_file(&link);
+            if let Some(fname) = log_path.file_name() {
+                let _ = std::os::unix::fs::symlink(fname, &link);
+            }
+
+            let exit_info = match status.code() {
+                Some(0) => "exit: 0 (clean)".to_string(),
+                Some(code) => format!("exit: {code} (error)"),
+                None => {
+                    use std::os::unix::process::ExitStatusExt;
+                    match status.signal() {
+                        Some(sig) => format!("killed by signal {sig}"),
+                        None => "unknown exit".to_string(),
+                    }
+                }
+            };
+
+            // Append exit status to the stderr log
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(log_path) {
+                use std::io::Write;
+                let _ = writeln!(f, "\n[amphetamine] {exit_info}");
+            }
+            log_verbose!("stderr log: {}", log_path.display());
+        }
+
+        // Save data protection: restore any files that went missing
+        if let Some(ref backup_dir) = save_backup {
+            restore_save_data(&pfx, backup_dir);
+        }
 
         if verb == "waitforexitandrun" {
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -750,6 +806,14 @@ fn build_env_vars(
         ("VKD3D_CONFIG", "shader_cache".into()),
     ];
 
+    // Steam Input: SDL 2.30+ reads SteamVirtualGamepadInfo to configure
+    // virtual gamepads. Steam sets SteamVirtualGamepadInfo_Proton before
+    // launching compat tools — Proton copies it to SteamVirtualGamepadInfo.
+    // Without this, controllers are invisible to SDL-based games.
+    if let Ok(gamepad_info) = std::env::var("SteamVirtualGamepadInfo_Proton") {
+        vars.push(("SteamVirtualGamepadInfo", gamepad_info));
+    }
+
     // Shader cache optimization — opt-in via install.py prompt.
     if shader_cache_enabled {
         let shader_cache = pfx.join("shader_cache");
@@ -878,6 +942,14 @@ fn write_launch_prom(
     w.header("amphetamine_shader_cache_gpu_vendor", "GPU vendor for shader cache", "gauge");
     w.info("amphetamine_shader_cache_gpu_vendor", "vendor", gpu_vendor());
 
+    // ---- Save data protection ----
+    w.separator();
+    let (save_files, save_bytes) = count_save_data_stats(pfx);
+    w.header("amphetamine_save_backup_files", "Number of save data files found pre-launch", "gauge");
+    w.gauge("amphetamine_save_backup_files", save_files as u64);
+    w.header("amphetamine_save_backup_bytes", "Total bytes of save data found pre-launch", "gauge");
+    w.gauge("amphetamine_save_backup_bytes", save_bytes);
+
     // ---- Environment variables ----
     w.separator();
     w.header("amphetamine_env_var", "Environment variable set for game", "gauge");
@@ -970,4 +1042,248 @@ fn find_steam_dir() -> PathBuf {
 
     log_warn!("Steam directory not found — game may not connect to Steam");
     PathBuf::from(&home).join(".steam/root")
+}
+
+// ---------------------------------------------------------------------------
+// Save data protection
+// ---------------------------------------------------------------------------
+// Snapshot save data before launch, restore any files that go missing.
+// Prevents Steam Cloud sync from wiping saves on first launch with a new
+// compatibility tool (empty registry → game thinks first run → sync conflict).
+
+const SAVE_SCAN_DIRS: &[&str] = &[
+    "AppData/Roaming",
+    "AppData/Local",
+    "AppData/LocalLow",
+    "Documents",
+];
+
+const SAVE_SKIP_DIRS: &[&str] = &["Microsoft", "Temp"];
+
+/// Snapshot all save data under the prefix before game launch.
+/// Returns the backup directory path if anything was backed up.
+fn snapshot_save_data(pfx: &Path) -> Option<PathBuf> {
+    let user_dir = pfx.join("drive_c/users/steamuser");
+    if !user_dir.exists() {
+        return None;
+    }
+
+    // Backup dir lives in $STEAM_COMPAT_DATA_PATH (parent of pfx)
+    let backup_dir = pfx.parent()?.join("save_backup");
+
+    // Remove old backup — we only keep the latest snapshot
+    let _ = std::fs::remove_dir_all(&backup_dir);
+
+    let mut total_files = 0u32;
+    let mut total_bytes = 0u64;
+
+    for scan_dir in SAVE_SCAN_DIRS {
+        let src = user_dir.join(scan_dir);
+        if !src.is_dir() {
+            continue;
+        }
+
+        // Scan subdirectories (game-specific folders like "FromSoftware/EldenRing")
+        let entries = match std::fs::read_dir(&src) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            // Skip non-save system directories
+            if SAVE_SKIP_DIRS.iter().any(|s| name_str.eq_ignore_ascii_case(s)) {
+                continue;
+            }
+
+            let entry_path = entry.path();
+            if !entry_path.is_dir() {
+                continue;
+            }
+
+            // Only backup dirs that contain actual files
+            let (files, bytes) = count_files_recursive(&entry_path);
+            if files == 0 {
+                continue;
+            }
+
+            let dst = backup_dir.join(scan_dir).join(&name);
+            copy_save_recursive(&entry_path, &dst);
+            total_files += files;
+            total_bytes += bytes;
+        }
+    }
+
+    if total_files == 0 {
+        return None;
+    }
+
+    // Write manifest for diagnostics
+    let manifest = format!("{total_files} files, {total_bytes} bytes\n");
+    let _ = std::fs::write(backup_dir.join("manifest.txt"), manifest);
+
+    log_info!("save data snapshot: {total_files} files, {total_bytes} bytes");
+
+    Some(backup_dir)
+}
+
+/// After game exits, check if any save files that existed pre-launch are now
+/// missing. Restore only those — never overwrite saves the game just wrote.
+fn restore_save_data(pfx: &Path, backup_dir: &Path) {
+    if !backup_dir.exists() {
+        return;
+    }
+
+    let user_dir = pfx.join("drive_c/users/steamuser");
+    let mut restored = 0u32;
+    let mut unchanged = 0u32;
+
+    for scan_dir in SAVE_SCAN_DIRS {
+        let backup_scan = backup_dir.join(scan_dir);
+        if !backup_scan.is_dir() {
+            continue;
+        }
+
+        let entries = match std::fs::read_dir(&backup_scan) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let backup_path = entry.path();
+            if !backup_path.is_dir() {
+                continue;
+            }
+
+            let original_path = user_dir.join(scan_dir).join(entry.file_name());
+            let (r, u) = restore_missing_files(&backup_path, &original_path);
+            restored += r;
+            unchanged += u;
+        }
+    }
+
+    log_info!("save data check: {restored} files restored, {unchanged} unchanged");
+
+    if restored > 0 {
+        // Keep backup as extra safety layer
+        log_warn!("{restored} save files were missing after game exit — restored from backup");
+    } else {
+        // All good — clean up backup
+        let _ = std::fs::remove_dir_all(backup_dir);
+    }
+}
+
+/// Recursively restore files that exist in backup but are missing from original.
+fn restore_missing_files(backup: &Path, original: &Path) -> (u32, u32) {
+    let mut restored = 0u32;
+    let mut unchanged = 0u32;
+
+    let entries = match std::fs::read_dir(backup) {
+        Ok(e) => e,
+        Err(_) => return (0, 0),
+    };
+
+    for entry in entries.flatten() {
+        let backup_file = entry.path();
+        let original_file = original.join(entry.file_name());
+
+        if backup_file.is_dir() {
+            let (r, u) = restore_missing_files(&backup_file, &original_file);
+            restored += r;
+            unchanged += u;
+        } else {
+            if original_file.exists() {
+                unchanged += 1;
+            } else {
+                // File existed pre-launch but is now gone — restore it
+                if let Some(parent) = original_file.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if std::fs::copy(&backup_file, &original_file).is_ok() {
+                    restored += 1;
+                }
+            }
+        }
+    }
+
+    (restored, unchanged)
+}
+
+/// Count files and total bytes in a directory tree.
+fn count_files_recursive(dir: &Path) -> (u32, u64) {
+    let mut files = 0u32;
+    let mut bytes = 0u64;
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return (0, 0),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let (f, b) = count_files_recursive(&path);
+            files += f;
+            bytes += b;
+        } else {
+            files += 1;
+            bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+
+    (files, bytes)
+}
+
+/// Count total save data files and bytes across all scan dirs (for Prometheus).
+fn count_save_data_stats(pfx: &Path) -> (u32, u64) {
+    let user_dir = pfx.join("drive_c/users/steamuser");
+    if !user_dir.exists() {
+        return (0, 0);
+    }
+    let mut total_files = 0u32;
+    let mut total_bytes = 0u64;
+    for scan_dir in SAVE_SCAN_DIRS {
+        let src = user_dir.join(scan_dir);
+        if !src.is_dir() { continue; }
+        let entries = match std::fs::read_dir(&src) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let name_str = entry.file_name().to_string_lossy().to_string();
+            if SAVE_SKIP_DIRS.iter().any(|s| name_str.eq_ignore_ascii_case(s)) {
+                continue;
+            }
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            let (f, b) = count_files_recursive(&path);
+            total_files += f;
+            total_bytes += b;
+        }
+    }
+    (total_files, total_bytes)
+}
+
+/// Recursive copy for save data (actual copies, not hardlinks).
+/// Save data is small (KB to low MB) so std::fs::copy is fine.
+fn copy_save_recursive(src: &Path, dst: &Path) {
+    let _ = std::fs::create_dir_all(dst);
+
+    let entries = match std::fs::read_dir(src) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if src_path.is_dir() {
+            copy_save_recursive(&src_path, &dst_path);
+        } else {
+            let _ = std::fs::copy(&src_path, &dst_path);
+        }
+    }
 }

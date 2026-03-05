@@ -27,6 +27,10 @@ struct PendingWait {
     client_fd: RawFd,
     deadline: Instant,
     cookie: u64,
+    // ntsync wait context (empty = legacy timeout-only wait)
+    ntsync_fds: Vec<RawFd>,
+    wait_all: bool,
+    owner: u32,
 }
 
 pub struct EventLoop {
@@ -47,6 +51,10 @@ pub struct EventLoop {
     peak_clients: usize,
     process_init_count: u64,
     thread_init_count: u64,
+    // ntsync: kernel-native NT sync (None = older kernel, fallback to stubs)
+    ntsync: Option<crate::ntsync::NtsyncDevice>,
+    ntsync_objects: HashMap<obj_handle_t, crate::ntsync::NtsyncObj>,
+    ntsync_objects_created: u64,
 }
 
 impl EventLoop {
@@ -64,6 +72,13 @@ impl EventLoop {
         epoll_add(epoll_fd, listener_fd, libc::EPOLLIN as u32);
         epoll_add(epoll_fd, signal_fd, libc::EPOLLIN as u32);
         epoll_add(epoll_fd, timer_fd, libc::EPOLLIN as u32);
+
+        let ntsync = crate::ntsync::NtsyncDevice::open();
+        if ntsync.is_some() {
+            eprintln!("[triskelion] ntsync: /dev/ntsync available, kernel-native sync enabled");
+        } else {
+            eprintln!("[triskelion] ntsync: /dev/ntsync not available, using stub sync");
+        }
 
         Self {
             epoll_fd,
@@ -83,6 +98,9 @@ impl EventLoop {
             peak_clients: 0,
             process_init_count: 0,
             thread_init_count: 0,
+            ntsync,
+            ntsync_objects: HashMap::new(),
+            ntsync_objects_created: 0,
         }
     }
 
@@ -130,6 +148,35 @@ impl EventLoop {
         let now = Instant::now();
         let mut i = 0;
         while i < self.pending_waits.len() {
+            // Try ntsync poll first (if this wait has ntsync FDs)
+            if !self.pending_waits[i].ntsync_fds.is_empty() {
+                if let Some(ntsync) = &self.ntsync {
+                    let fds = &self.pending_waits[i].ntsync_fds;
+                    let wait_all = self.pending_waits[i].wait_all;
+                    let owner = self.pending_waits[i].owner;
+                    let result = if wait_all {
+                        ntsync.wait_all(fds, 0, owner)
+                    } else {
+                        ntsync.wait_any(fds, 0, owner)
+                    };
+                    match result {
+                        crate::ntsync::WaitResult::Signaled(index) => {
+                            let pending = self.pending_waits.swap_remove(i);
+                            let reply = SelectReply {
+                                header: ReplyHeader { error: 0, reply_size: 0 },
+                                apc_handle: 0,
+                                signaled: index as i32,
+                            };
+                            if let Some(client) = self.clients.get(&pending.client_fd) {
+                                client.write_reply(&reply_fixed(&reply));
+                            }
+                            continue; // don't increment i (swap_remove shifted)
+                        }
+                        _ => {} // not yet signaled, check deadline below
+                    }
+                }
+            }
+
             if now >= self.pending_waits[i].deadline {
                 let pending = self.pending_waits.swap_remove(i);
                 // Reply with STATUS_TIMEOUT
@@ -178,6 +225,17 @@ impl EventLoop {
                 it_interval: libc::timespec { tv_sec: 0, tv_nsec: 0 },
                 it_value: libc::timespec { tv_sec: 0, tv_nsec: 0 },
             }
+        };
+        unsafe { libc::timerfd_settime(self.timer_fd, 0, &spec, std::ptr::null_mut()); }
+    }
+
+    // Re-arm timer to fire immediately (1ns). Called after signal/release
+    // operations that may wake pending ntsync waits.
+    fn arm_timer_immediate(&self) {
+        if self.pending_waits.is_empty() { return; }
+        let spec = libc::itimerspec {
+            it_interval: libc::timespec { tv_sec: 0, tv_nsec: 0 },
+            it_value: libc::timespec { tv_sec: 0, tv_nsec: 1 },
         };
         unsafe { libc::timerfd_settime(self.timer_fd, 0, &spec, std::ptr::null_mut()); }
     }
@@ -640,6 +698,8 @@ impl RequestHandler for EventLoop {
                 let req: CloseHandleRequest = unsafe {
                     std::ptr::read_unaligned(buf.as_ptr() as *const _)
                 };
+                // Clean up ntsync object (Drop closes the kernel FD)
+                self.ntsync_objects.remove(&req.handle);
                 if let Some(process) = self.state.processes.get_mut(&pid) {
                     process.handles.close(req.handle);
                 }
@@ -878,8 +938,96 @@ impl RequestHandler for EventLoop {
         //          positive = absolute time (Windows FILETIME)
         let has_objects = req.size > 0;
 
-        if req.timeout == 0 {
-            // Poll: return immediately, nothing signaled
+        // Parse select_op to extract wait handles (if ntsync available)
+        // VARARG layout: [apc_result(40 bytes)] [select_op(req.size bytes)] [contexts...]
+        // select_op: [opcode(u32)] [handles(u32 each)...]
+        const APC_RESULT_SIZE: usize = 40;
+        const SELECT_WAIT: u32 = 1;
+        const SELECT_WAIT_ALL: u32 = 2;
+
+        let mut ntsync_fds: Vec<RawFd> = Vec::new();
+        let mut wait_all = false;
+        let mut owner: u32 = 0;
+
+        if has_objects && self.ntsync.is_some() {
+            let select_op_offset = std::mem::size_of::<SelectRequest>() + APC_RESULT_SIZE;
+            if buf.len() >= select_op_offset + 4 && req.size >= 4 {
+                let opcode = u32::from_le_bytes([
+                    buf[select_op_offset], buf[select_op_offset + 1],
+                    buf[select_op_offset + 2], buf[select_op_offset + 3],
+                ]);
+                wait_all = opcode == SELECT_WAIT_ALL;
+
+                if opcode == SELECT_WAIT || opcode == SELECT_WAIT_ALL {
+                    let handle_count = ((req.size as usize) - 4) / 4;
+                    let handles_start = select_op_offset + 4;
+                    let tid = self.client_thread_id(client_fd as RawFd).unwrap_or(0);
+                    owner = tid;
+
+                    let mut all_have_ntsync = true;
+                    for h_idx in 0..handle_count {
+                        let off = handles_start + h_idx * 4;
+                        if off + 4 > buf.len() { all_have_ntsync = false; break; }
+                        let handle = u32::from_le_bytes([
+                            buf[off], buf[off + 1], buf[off + 2], buf[off + 3],
+                        ]);
+                        if let Some(obj) = self.ntsync_objects.get(&handle) {
+                            ntsync_fds.push(obj.fd());
+                        } else {
+                            all_have_ntsync = false;
+                            break;
+                        }
+                    }
+                    if !all_have_ntsync {
+                        ntsync_fds.clear(); // fall back to legacy for mixed waits
+                    }
+                }
+            }
+        }
+
+        // Try immediate ntsync poll for object waits
+        if !ntsync_fds.is_empty() {
+            if let Some(ntsync) = &self.ntsync {
+                let result = if wait_all {
+                    ntsync.wait_all(&ntsync_fds, 0, owner)
+                } else {
+                    ntsync.wait_any(&ntsync_fds, 0, owner)
+                };
+                match result {
+                    crate::ntsync::WaitResult::Signaled(index) => {
+                        if req.timeout == 0 {
+                            // Poll mode: return signaled immediately
+                            let reply = SelectReply {
+                                header: ReplyHeader { error: 0, reply_size: 0 },
+                                apc_handle: 0,
+                                signaled: index as i32,
+                            };
+                            return reply_fixed(&reply);
+                        }
+                        // Non-poll: return signaled
+                        let reply = SelectReply {
+                            header: ReplyHeader { error: 0, reply_size: 0 },
+                            apc_handle: 0,
+                            signaled: index as i32,
+                        };
+                        return reply_fixed(&reply);
+                    }
+                    _ => {
+                        // Not signaled yet -- if poll mode, return timeout
+                        if req.timeout == 0 {
+                            let reply = SelectReply {
+                                header: ReplyHeader { error: 0x0000_0102, reply_size: 0 },
+                                apc_handle: 0,
+                                signaled: 0,
+                            };
+                            return reply_fixed(&reply);
+                        }
+                        // Otherwise fall through to defer with ntsync_fds
+                    }
+                }
+            }
+        } else if req.timeout == 0 {
+            // Poll without ntsync: return immediately
             let reply = SelectReply {
                 header: ReplyHeader { error: 0x0000_0102, reply_size: 0 }, // STATUS_TIMEOUT
                 apc_handle: 0,
@@ -890,24 +1038,16 @@ impl RequestHandler for EventLoop {
 
         // Compute wait duration
         let duration_ns = if has_objects && req.timeout < 0 {
-            // Object wait with relative timeout: honor the timeout
             (-req.timeout as u64) * 100
         } else if has_objects {
-            // Object wait with infinite or absolute timeout:
-            // Defer briefly and return STATUS_TIMEOUT so Wine retries.
-            // NEVER return "signaled" for object waits -- that tells Wine
-            // the object was acquired, causing data races when multiple
-            // threads wait on the same mutex/event.
+            // With ntsync: still defer, but we'll poll objects on timer
             1_000_000 // 1ms retry interval
         } else if req.timeout < 0 {
-            // Pure sleep with relative timeout
             (-req.timeout as u64) * 100
         } else {
-            // Pure sleep with absolute timeout
             10_000_000 // 10ms fallback
         };
 
-        // Cap at 5 seconds to avoid stuck threads
         let duration_ns = duration_ns.min(5_000_000_000);
         let deadline = Instant::now() + std::time::Duration::from_nanos(duration_ns);
 
@@ -915,15 +1055,26 @@ impl RequestHandler for EventLoop {
             client_fd: client_fd as RawFd,
             deadline,
             cookie: req.cookie,
+            ntsync_fds,
+            wait_all,
+            owner,
         });
         self.arm_timer();
 
-        // Deferred reply (handled in check_pending_waits)
         Reply::Deferred
     }
 
-    fn handle_create_event(&mut self, client_fd: i32, _buf: &[u8]) -> Reply {
-        // Allocate a handle for the event
+    fn handle_create_event(&mut self, client_fd: i32, buf: &[u8]) -> Reply {
+        // Parse request fields for ntsync
+        let (manual_reset, initial_state) = if buf.len() >= std::mem::size_of::<CreateEventRequest>() {
+            let req: CreateEventRequest = unsafe {
+                std::ptr::read_unaligned(buf.as_ptr() as *const _)
+            };
+            (req.manual_reset != 0, req.initial_state != 0)
+        } else {
+            (false, false)
+        };
+
         let pid = self.clients.get(&(client_fd as RawFd))
             .and_then(|c| if c.process_id != 0 { Some(c.process_id) } else { None });
         let handle = if let Some(pid) = pid {
@@ -931,6 +1082,16 @@ impl RequestHandler for EventLoop {
                 process.handles.allocate(0, 0x001F0003) // EVENT_ALL_ACCESS
             } else { 0 }
         } else { 0 };
+
+        // Create kernel ntsync object if available
+        if handle != 0 {
+            if let Some(ntsync) = &self.ntsync {
+                if let Some(obj) = ntsync.create_event(manual_reset, initial_state) {
+                    self.ntsync_objects.insert(handle, obj);
+                    self.ntsync_objects_created += 1;
+                }
+            }
+        }
 
         let reply = CreateEventReply {
             header: ReplyHeader { error: 0, reply_size: 0 },
@@ -940,8 +1101,32 @@ impl RequestHandler for EventLoop {
         reply_fixed(&reply)
     }
 
-    fn handle_event_op(&mut self, _client_fd: i32, _buf: &[u8]) -> Reply {
-        // set/reset/pulse event -- stub success
+    fn handle_event_op(&mut self, _client_fd: i32, buf: &[u8]) -> Reply {
+        if buf.len() >= std::mem::size_of::<EventOpRequest>() {
+            let req: EventOpRequest = unsafe {
+                std::ptr::read_unaligned(buf.as_ptr() as *const _)
+            };
+            if let Some(obj) = self.ntsync_objects.get(&req.handle) {
+                // Wine event_op codes: PULSE_EVENT=0, SET_EVENT=1, RESET_EVENT=2
+                let prev = match req.op {
+                    1 => obj.event_set().unwrap_or(0),
+                    2 => obj.event_reset().unwrap_or(0),
+                    0 => obj.event_pulse().unwrap_or(0),
+                    _ => 0,
+                };
+                // Signal operation may wake pending waits -- re-arm timer immediately
+                if req.op == 1 || req.op == 0 {
+                    self.arm_timer_immediate();
+                }
+                let reply = EventOpReply {
+                    header: ReplyHeader { error: 0, reply_size: 0 },
+                    state: prev as i32,
+                    _pad_0: [0; 4],
+                };
+                return reply_fixed(&reply);
+            }
+        }
+        // Fallback: stub success
         let reply = EventOpReply {
             header: ReplyHeader { error: 0, reply_size: 0 },
             state: 0,
@@ -971,7 +1156,19 @@ impl RequestHandler for EventLoop {
 
     // ---- Additional critical stubs to prevent hangs ----
 
-    fn handle_create_mutex(&mut self, client_fd: i32, _buf: &[u8]) -> Reply {
+    fn handle_create_mutex(&mut self, client_fd: i32, buf: &[u8]) -> Reply {
+        // Parse request: if owned=1, create with owner=client's thread ID
+        let owned = if buf.len() >= std::mem::size_of::<CreateMutexRequest>() {
+            let req: CreateMutexRequest = unsafe {
+                std::ptr::read_unaligned(buf.as_ptr() as *const _)
+            };
+            req.owned != 0
+        } else {
+            false
+        };
+
+        let tid = self.client_thread_id(client_fd as RawFd).unwrap_or(0);
+
         let pid = self.clients.get(&(client_fd as RawFd))
             .and_then(|c| if c.process_id != 0 { Some(c.process_id) } else { None });
         let handle = if let Some(pid) = pid {
@@ -979,6 +1176,17 @@ impl RequestHandler for EventLoop {
                 process.handles.allocate(0, 0x001F0001) // MUTANT_ALL_ACCESS
             } else { 0 }
         } else { 0 };
+
+        // Create kernel ntsync mutex
+        if handle != 0 {
+            if let Some(ntsync) = &self.ntsync {
+                let (owner, count) = if owned { (tid, 1) } else { (0, 0) };
+                if let Some(obj) = ntsync.create_mutex(owner, count) {
+                    self.ntsync_objects.insert(handle, obj);
+                    self.ntsync_objects_created += 1;
+                }
+            }
+        }
 
         let reply = CreateMutexReply {
             header: ReplyHeader { error: 0, reply_size: 0 },
@@ -988,7 +1196,16 @@ impl RequestHandler for EventLoop {
         reply_fixed(&reply)
     }
 
-    fn handle_create_semaphore(&mut self, client_fd: i32, _buf: &[u8]) -> Reply {
+    fn handle_create_semaphore(&mut self, client_fd: i32, buf: &[u8]) -> Reply {
+        let (initial, max) = if buf.len() >= std::mem::size_of::<CreateSemaphoreRequest>() {
+            let req: CreateSemaphoreRequest = unsafe {
+                std::ptr::read_unaligned(buf.as_ptr() as *const _)
+            };
+            (req.initial, req.max)
+        } else {
+            (0, 1)
+        };
+
         let pid = self.clients.get(&(client_fd as RawFd))
             .and_then(|c| if c.process_id != 0 { Some(c.process_id) } else { None });
         let handle = if let Some(pid) = pid {
@@ -996,6 +1213,16 @@ impl RequestHandler for EventLoop {
                 process.handles.allocate(0, 0x001F0003) // SEMAPHORE_ALL_ACCESS
             } else { 0 }
         } else { 0 };
+
+        // Create kernel ntsync semaphore
+        if handle != 0 {
+            if let Some(ntsync) = &self.ntsync {
+                if let Some(obj) = ntsync.create_sem(initial, max) {
+                    self.ntsync_objects.insert(handle, obj);
+                    self.ntsync_objects_created += 1;
+                }
+            }
+        }
 
         let reply = CreateSemaphoreReply {
             header: ReplyHeader { error: 0, reply_size: 0 },
@@ -1005,7 +1232,26 @@ impl RequestHandler for EventLoop {
         reply_fixed(&reply)
     }
 
-    fn handle_release_semaphore(&mut self, _client_fd: i32, _buf: &[u8]) -> Reply {
+    fn handle_release_semaphore(&mut self, _client_fd: i32, buf: &[u8]) -> Reply {
+        if buf.len() >= std::mem::size_of::<ReleaseSemaphoreRequest>() {
+            let req: ReleaseSemaphoreRequest = unsafe {
+                std::ptr::read_unaligned(buf.as_ptr() as *const _)
+            };
+            if let Some(obj) = self.ntsync_objects.get(&req.handle) {
+                match obj.sem_release(req.count) {
+                    Ok(prev) => {
+                        self.arm_timer_immediate();
+                        let reply = ReleaseSemaphoreReply {
+                            header: ReplyHeader { error: 0, reply_size: 0 },
+                            prev_count: prev,
+                            _pad_0: [0; 4],
+                        };
+                        return reply_fixed(&reply);
+                    }
+                    Err(_) => {} // fall through to stub
+                }
+            }
+        }
         let reply = ReleaseSemaphoreReply {
             header: ReplyHeader { error: 0, reply_size: 0 },
             prev_count: 0,
@@ -1014,7 +1260,27 @@ impl RequestHandler for EventLoop {
         reply_fixed(&reply)
     }
 
-    fn handle_release_mutex(&mut self, _client_fd: i32, _buf: &[u8]) -> Reply {
+    fn handle_release_mutex(&mut self, client_fd: i32, buf: &[u8]) -> Reply {
+        if buf.len() >= std::mem::size_of::<ReleaseMutexRequest>() {
+            let req: ReleaseMutexRequest = unsafe {
+                std::ptr::read_unaligned(buf.as_ptr() as *const _)
+            };
+            if let Some(obj) = self.ntsync_objects.get(&req.handle) {
+                let tid = self.client_thread_id(client_fd as RawFd).unwrap_or(0);
+                match obj.mutex_unlock(tid) {
+                    Ok(prev) => {
+                        self.arm_timer_immediate();
+                        let reply = ReleaseMutexReply {
+                            header: ReplyHeader { error: 0, reply_size: 0 },
+                            prev_count: prev,
+                            _pad_0: [0; 4],
+                        };
+                        return reply_fixed(&reply);
+                    }
+                    Err(_) => {} // fall through to stub
+                }
+            }
+        }
         let reply = ReleaseMutexReply {
             header: ReplyHeader { error: 0, reply_size: 0 },
             prev_count: 0,
@@ -1113,6 +1379,14 @@ impl EventLoop {
 
         w.header("amphetamine_session_thread_inits", "Total thread initializations", "gauge");
         w.gauge("amphetamine_session_thread_inits", self.thread_init_count);
+
+        // ---- ntsync ----
+        w.separator();
+        w.header("amphetamine_ntsync_available", "Kernel ntsync driver available (1=yes)", "gauge");
+        w.gauge("amphetamine_ntsync_available", if self.ntsync.is_some() { 1u64 } else { 0 });
+
+        w.header("amphetamine_ntsync_objects_created", "Total ntsync objects created", "gauge");
+        w.gauge("amphetamine_ntsync_objects_created", self.ntsync_objects_created);
 
         // ---- Per-opcode counts ----
         w.separator();
