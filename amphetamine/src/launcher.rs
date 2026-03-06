@@ -165,6 +165,7 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
         &wine_dir, &steam_dir, &pfx, &self_exe,
         &dxvk_deployed, &vkd3d_deployed, trace, shader_cache_enabled,
     );
+    let custom_env = parse_env_config(&self_exe);
     let t_total_setup = t_start.elapsed();
 
     // Write timing + diagnostics (verbose only)
@@ -226,6 +227,9 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
         cmd.arg(game_exe);
         cmd.args(&args[1..]);
         for (k, v) in &env_vars {
+            cmd.env(k, v);
+        }
+        for (k, v) in &custom_env {
             cmd.env(k, v);
         }
 
@@ -882,6 +886,45 @@ fn build_env_vars(
             // near-instant instead of compiling from scratch.
             vars.push(("RADV_PERFTEST", "gpl".into()));
         }
+    }
+
+    vars
+}
+
+/// Parse user-supplied environment variables from env_config file.
+/// Format: KEY=VALUE lines. # comments and blank lines are ignored.
+/// Returns empty Vec if the file is missing or unreadable.
+fn parse_env_config(self_exe: &Path) -> Vec<(String, String)> {
+    let config_path = match self_exe.parent() {
+        Some(dir) => dir.join("env_config"),
+        None => return Vec::new(),
+    };
+
+    let contents = match std::fs::read_to_string(&config_path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut vars = Vec::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some(eq_pos) = line.find('=') else {
+            eprintln!("[amphetamine] env_config: ignoring malformed line: {line}");
+            continue;
+        };
+        let key = line[..eq_pos].trim();
+        let value = line[eq_pos + 1..].trim();
+        if key.is_empty() {
+            continue;
+        }
+        vars.push((key.to_string(), value.to_string()));
+    }
+
+    if !vars.is_empty() {
+        eprintln!("[amphetamine] env_config: loaded {} custom variable(s)", vars.len());
     }
 
     vars

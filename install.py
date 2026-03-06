@@ -63,6 +63,42 @@ PEEK_MSG_PREFIX = """\
             """
 
 
+ENV_CONFIG_TEMPLATE = """\
+# amphetamine custom environment variables
+#
+# Format: KEY=VALUE (one per line)
+# Lines starting with # are comments. Blank lines are ignored.
+# Variables set here override amphetamine's built-in defaults.
+# Edit this file any time — changes apply on next game launch.
+#
+# --- Logging ---
+# WINEDEBUG=-all
+# DXVK_LOG_LEVEL=none
+# DXVK_NVAPI_LOG_LEVEL=none
+# VKD3D_DEBUG=none
+# VKD3D_SHADER_DEBUG=none
+# PROTON_LOG=0
+#
+# --- Wayland ---
+# WINE_ENABLE_WAYLAND=1
+#
+# --- Sync ---
+# WINE_NTSYNC=1
+#
+# --- Overlays ---
+# MANGOHUD=1
+# MANGOHUD_CONFIG=fps,frametime,gpu_temp,cpu_temp
+#
+# --- Performance ---
+# DXVK_ASYNC=1
+# mesa_glthread=true
+# RADV_PERFTEST=gpl
+#
+# --- Game-specific ---
+# PROTON_ENABLE_NVAPI=1
+"""
+
+
 def log(level, msg):
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] [{level}]   {msg}", file=sys.stderr)
@@ -351,6 +387,31 @@ def configure_shader_cache():
         log("INFO", "Shader cache optimization disabled")
 
 
+def configure_custom_env():
+    """Ask the user whether to create a custom environment variable config."""
+    config_file = STEAM_COMPAT_DIR / "env_config"
+
+    if config_file.exists():
+        log("INFO", f"Custom env config: {config_file}")
+        log("INFO", "  Edit it directly — changes apply on next game launch")
+        return
+
+    print()
+    print("  Custom environment variables: amphetamine can create a config file")
+    print("  where you define extra environment variables applied at game launch.")
+    print("  Variables you set override amphetamine's built-in defaults.")
+    print()
+    print(f"  Config location: {config_file}")
+    print()
+
+    if prompt_yn("  Create custom environment config?"):
+        config_file.write_text(ENV_CONFIG_TEMPLATE)
+        log("INFO", f"Custom env config created: {config_file}")
+        log("INFO", "  Uncomment variables to enable them")
+    else:
+        log("INFO", "Custom env config skipped (you can create it manually later)")
+
+
 def check_ntsync():
     """Check if the kernel supports ntsync and inform the user."""
     ntsync_available = Path("/dev/ntsync").exists()
@@ -462,6 +523,7 @@ def main():
         return ret
 
     configure_shader_cache()
+    configure_custom_env()
 
     check_ntsync()
 
