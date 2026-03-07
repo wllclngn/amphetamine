@@ -1,13 +1,13 @@
 # amphetamine
 
-amphetamine is a Steam compatibility layer that utilizes triskelion, a single-threaded wineserver replacement. Together they replace the entire Proton/wineserver stack for Steam.
+amphetamine is a Steam compatibility layer that utilizes triskelion, a lock-free wineserver replacement. Together they replace the entire Proton/wineserver stack for Steam.
 
 ## Replacing Proton
 
 | | Proton | amphetamine |
 |---|---|---|
 | Launcher | Python (~2,000 lines) | Rust (1,557 lines, compiled) |
-| Wineserver | Wine's C wineserver (26,000+ lines) | triskelion (6,448 lines Rust, single-threaded) |
+| Wineserver | Wine's C wineserver (26,000+ lines) | triskelion (6,448 lines Rust, lock-free) |
 | Binary count | 3+ (script, wineserver, toolchain) | 1 (942 KB) |
 | Dependencies | Python 3, runtime libraries | libc |
 | Deployment cache | None (re-evaluates every launch) | v3 per-component (wine, dxvk, vkd3d, steam) |
@@ -61,19 +61,11 @@ Steam
 
 First launch sets up the prefix (~1500 symlinks + files via getdents64/hardlinks). Every launch after hits the deployment cache and skips straight to wine64.
 
-## Anti-Cheat Compliance (VAC)
+## Anti-Cheat Compliance
 
-**amphetamine does not interfere with VAC.** Valve's anti-cheat system was researched to ensure compliance — here's why you're safe:
+amphetamine does not interfere with VAC, EAC, or BattlEye. Triskelion runs as a separate native Linux process — it communicates with Wine via Unix domain sockets and never appears in the game's memory maps. No game memory modification, no DLL hooking, no import table patching.
 
-**VAC doesn't see triskelion.** VAC's Linux modules scan `/proc/$(pidof game)/maps`, `/proc/$(pidof game)/mem`, and `/proc/$(pidof game)/status` — the game process's memory, loaded libraries, and debugger state. Triskelion runs as a separate native Linux process communicating via Unix domain sockets. It never appears in the game's memory maps.
-
-**No game memory modification.** Triskelion manages Windows objects (handles, sync primitives, registry) via IPC. It never touches game process memory, hooks DLL functions, or modifies import tables. These are the things VAC actually detects — signature-based memory scanning, IAT hooking, VMT hooking, and debugger attachment.
-
-**Valve explicitly supports custom compatibility tools.** Steam's `~/.steam/root/compatibilitytools.d/` infrastructure exists for exactly this purpose. Valve developer Plagman stated: *"No, you won't get VAC banned. VAC bans are only handed out to users of cheat programs."* Custom builds like Proton-GE and wine-tkg have operated for years with zero VAC ban incidents.
-
-**EAC / BattlEye**: These third-party anti-cheat systems run in user-space on Proton (not kernel-level like on Windows) and require per-game developer opt-in. They run inside the Wine environment and see the Windows-side view of the system — the native Linux wineserver process is outside their scope.
-
-**What amphetamine is not**: A cheat, a bypass, or a modification to game code.
+Steam's `compatibilitytools.d/` infrastructure exists for custom compatibility tools. Proton-GE and wine-tkg have operated for years with zero VAC ban incidents. amphetamine is not a cheat, a bypass, or a modification to game code.
 
 ## Performance
 
@@ -187,12 +179,12 @@ Requires Rust 2024 edition (rustc 1.85+). Single dependency: `libc`.
 
 *Quocunque Jeceris Stabit*
 
-Single-threaded wineserver replacement. 942 KB binary, single dependency (libc), 41 handlers across 306 opcodes.
+Lock-free wineserver replacement. 942 KB binary, single dependency (libc), 41 handlers across 306 opcodes.
 
 | Leg | File | Domain |
 |-----|------|--------|
 | 1: queue | `queue.rs` | Per-thread SPSC ring buffers (256 slots). Cache-line aligned atomics. Shared memory in `/dev/shm`. Futex wake on post/send. |
-| 2: sync | `ntsync.rs` + `sync.rs` | ntsync kernel driver (Linux 6.14+) for native NT semaphore/mutex/event via `/dev/ntsync` ioctls. Fallback: CAS-based atomics with futex wake (`sync.rs`). |
+| 2: sync | `ntsync.rs` | ntsync kernel driver (Linux 6.14+) for native NT semaphore/mutex/event via `/dev/ntsync` ioctls. |
 | 3: objects | `objects.rs` | Handle tables (dense array + free list), process/thread state, Windows handle encoding. |
 
 **Protocol**: 306 opcodes auto-generated from Wine's `protocol.def` by `build.rs` (829 lines). 41 handlers with logic; rest return `STATUS_NOT_IMPLEMENTED`. Adding a handler = one function.
@@ -236,7 +228,6 @@ amphetamine/
       registry.rs            In-memory registry tree (HashMap values)
       queue.rs               SPSC ring buffer message queues (futex wake)
       ntsync.rs              ntsync kernel driver wrapper (/dev/ntsync ioctls)
-      sync.rs                Sync primitive fallback (CAS + futex wake)
       shm.rs                 Shared memory management
       protocol.rs            Protocol types and dispatch
       packager.rs            Steam compatibility tool packaging

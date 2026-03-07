@@ -1,4 +1,4 @@
-// triskelion -- single-threaded wineserver replacement + proton launcher
+// triskelion -- lock-free wineserver replacement + proton launcher
 //
 // Multi-mode binary:
 //   ./proton <verb> <exe>   Proton launcher (Steam compatibility tool)
