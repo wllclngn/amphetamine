@@ -1,7 +1,5 @@
 # amphetamine
 
-A complete Proton and wineserver replacement for Linux gaming. One Rust binary replaces both Proton's Python launcher and Wine's C wineserver.
-
 amphetamine is a Steam compatibility layer that utilizes triskelion, a single-threaded wineserver replacement. Together they replace the entire Proton/wineserver stack for Steam.
 
 ## Replacing Proton
