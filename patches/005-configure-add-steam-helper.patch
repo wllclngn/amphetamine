@@ -1,0 +1,20 @@
+From: amphetamine <amphetamine@triskelion>
+Subject: configure: register steam_helper program in Wine build system
+
+Adds WINE_CONFIG_MAKEFILE entry so Proton's steam_helper (steam.exe) builds
+as a Wine builtin program. Source symlinked from Proton's steam_helper/ into
+programs/steam_helper/. Requires autoconf regeneration after applying.
+
+---
+diff --git a/configure.ac b/configure.ac
+index 33860c12462..dbaa9b6d2da 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -3595,6 +3595,7 @@ WINE_CONFIG_MAKEFILE(programs/shutdown)
+ WINE_CONFIG_MAKEFILE(programs/sort)
+ WINE_CONFIG_MAKEFILE(programs/spoolsv)
+ WINE_CONFIG_MAKEFILE(programs/start)
++WINE_CONFIG_MAKEFILE(programs/steam_helper)
+ WINE_CONFIG_MAKEFILE(programs/subst)
+ WINE_CONFIG_MAKEFILE(programs/svchost)
+ WINE_CONFIG_MAKEFILE(programs/systeminfo)

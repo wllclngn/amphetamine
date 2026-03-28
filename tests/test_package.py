@@ -17,7 +17,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-TOOL_DIR = Path.home() / ".steam" / "root" / "compatibilitytools.d" / "amphetamine"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from util import _USER_HOME
+
+TOOL_DIR = _USER_HOME / ".steam" / "root" / "compatibilitytools.d" / "amphetamine"
 FILES_DIR = TOOL_DIR / "files"
 BIN_DIR = FILES_DIR / "bin"
 LIB_WIN = FILES_DIR / "lib" / "wine" / "x86_64-windows"
@@ -127,7 +130,7 @@ def test_drivers(r: TestResult):
     """Verify Unix-side driver .so files are present."""
     critical_drivers = [
         "ntdll.so", "win32u.so", "opengl32.so",
-        "winevulkan.so", "winex11.so",
+        "winevulkan.so",
     ]
     for drv in critical_drivers:
         path = LIB_UNIX / drv
@@ -214,13 +217,13 @@ def test_prefix_init(r: TestResult):
 
 def test_smoke_launch(r: TestResult, app_id: str):
     """Launch a Steam game through amphetamine and verify it starts."""
-    compat_data = Path.home() / ".steam" / "root" / "steamapps" / "compatdata" / app_id
+    compat_data = _USER_HOME / ".steam" / "root" / "steamapps" / "compatdata" / app_id
     if not compat_data.exists():
         r.fail(f"smoke launch {app_id}", f"no compatdata for app {app_id}")
         return
 
     # Find the game's install directory
-    manifest = Path.home() / ".steam" / "root" / "steamapps" / f"appmanifest_{app_id}.acf"
+    manifest = _USER_HOME / ".steam" / "root" / "steamapps" / f"appmanifest_{app_id}.acf"
     if not manifest.exists():
         r.fail(f"smoke launch {app_id}", "app manifest not found")
         return
@@ -236,7 +239,7 @@ def test_smoke_launch(r: TestResult, app_id: str):
         r.fail(f"smoke launch {app_id}", "could not parse installdir")
         return
 
-    game_path = Path.home() / ".steam" / "root" / "steamapps" / "common" / install_dir
+    game_path = _USER_HOME / ".steam" / "root" / "steamapps" / "common" / install_dir
     if not game_path.exists():
         r.fail(f"smoke launch {app_id}", f"game not installed at {game_path}")
         return

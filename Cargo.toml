@@ -1,5 +1,5 @@
 [workspace]
-members = ["amphetamine"]
+members = ["rust"]
 resolver = "3"
 
 [profile.release]

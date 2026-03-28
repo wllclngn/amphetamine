@@ -1,0 +1,33 @@
+--- a/dlls/win32u/opengl.c
++++ b/dlls/win32u/opengl.c
+@@ -2284,11 +2284,28 @@
+ {
+     void *share_private = share ? share->driver_private : NULL;
+     int format;
++    HWND hwnd;
+
+     TRACE( "context %p, hdc %p, share %p, attribs %p\n", context, hdc, share, attribs );
+
+-    if ((format = get_dc_pixel_format( hdc )) <= 0 &&
+-        (format = get_window_pixel_format( NtUserWindowFromDC( hdc ) )) <= 0)
++    hwnd = NtUserWindowFromDC( hdc );
++    format = get_dc_pixel_format( hdc );
++    if (format <= 0) format = get_window_pixel_format( hwnd );
++    /* Fallback: check the window's current GL drawable format.
++     * wglSetPixelFormat stores format on the drawable via opengl_drawable_create,
++     * but the DC/window pixel_format fields may not be set on all platforms
++     * (e.g., winewayland + NVIDIA EGL where NtUserWindowFromDC can fail).
++     * Credit: investigation informed by Etaash's wine-valve GL architecture. */
++    if (format <= 0 && hwnd)
++    {
++        struct opengl_drawable *drawable = get_window_current_drawable( hwnd );
++        if (drawable)
++        {
++            format = drawable->format;
++            opengl_drawable_release( drawable );
++        }
++    }
++    if (format <= 0)
+     {
+         if (!format) RtlSetLastWin32Error( ERROR_INVALID_PIXEL_FORMAT );
+         else RtlSetLastWin32Error( ERROR_INVALID_HANDLE );

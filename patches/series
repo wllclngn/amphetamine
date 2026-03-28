@@ -1,0 +1,15 @@
+# amphetamine Wine patches — applied to upstream Wine 11.5 (wine-src)
+# Format: one patch per line, relative to patches/ directory
+# Applied via: git apply in wine source root
+
+# ntdll security: guard NULL pointer dereference in NtFilterToken
+wine/001-ntdll-guard-NtFilterToken-null-deref.patch
+
+# ntdll loader: create process heap before loader lock to prevent deadlock
+wine/002-ntdll-create-process-heap-before-loader-lock.patch
+
+# win32u sysparams: soften USER lock assert to warning
+wine/003-win32u-soften-user-lock-assert.patch
+
+# NOTE: 004-configure-add-lsteamclient-dll.patch applies to wine-valve (Valve's fork),
+# not wine-src (upstream). It's applied by build_lsteamclient() in install.py.

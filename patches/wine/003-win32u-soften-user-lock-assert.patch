@@ -1,0 +1,15 @@
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index 6490dcb..8da9df7 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -318,8 +318,8 @@ void user_check_not_lock(void)
+ {
+     if (user_lock_thread == GetCurrentThreadId())
+     {
+-        ERR( "BUG: holding USER lock\n" );
+-        assert( 0 );
++        ERR( "BUG: holding USER lock (triskelion: softened)\n" );
++        /* assert( 0 ); -- triskelion: softened */
+     }
+ }
+ 

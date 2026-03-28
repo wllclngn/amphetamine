@@ -1,0 +1,13 @@
+diff --git a/dlls/ntdll/unix/security.c b/dlls/ntdll/unix/security.c
+index f18f967..1cc64ca 100644
+--- a/dlls/ntdll/unix/security.c
++++ b/dlls/ntdll/unix/security.c
+@@ -811,7 +811,7 @@ NTSTATUS WINAPI NtFilterToken( HANDLE token, ULONG flags, TOKEN_GROUPS *disable_
+     if (privileges)
+         privileges_len = privileges->PrivilegeCount * sizeof(LUID_AND_ATTRIBUTES);
+ 
+-    if (disable_sids)
++    if (disable_sids && disable_sids->GroupCount)
+     {
+         DWORD len, i;
+         BYTE *tmp;

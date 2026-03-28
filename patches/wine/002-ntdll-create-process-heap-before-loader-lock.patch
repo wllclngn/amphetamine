@@ -1,0 +1,17 @@
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index b19bf78..b563af3 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -1895,6 +1895,12 @@ NTSTATUS WINAPI LdrDisableThreadCalloutsForDll(HMODULE hModule)
+     WINE_MODREF *wm;
+     NTSTATUS    ret = STATUS_SUCCESS;
+ 
++
++    /* Create process heap before entering loader CS. RtlEnterCriticalSection
++     * may need to allocate memory if the lock appears contended, and that
++     * requires a valid ProcessHeap. */
++    if (!NtCurrentTeb()->Peb->ProcessHeap)
++        NtCurrentTeb()->Peb->ProcessHeap = RtlCreateHeap( HEAP_GROWABLE, NULL, 0, 0, NULL, NULL );
+     RtlEnterCriticalSection( &loader_section );
+ 
+     wm = get_modref( hModule );

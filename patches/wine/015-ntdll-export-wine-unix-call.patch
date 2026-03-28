@@ -1,0 +1,41 @@
+From: amphetamine <amphetamine@localhost>
+Subject: [PATCH] ntdll: Export __wine_unix_call as PE-callable stdcall function
+
+Port wine-valve's compat___wine_unix_call export. This exposes
+__wine_unix_call as a proper PE DLL export that third-party PE code
+(such as EasyAntiCheat's start_protected_game.exe) can resolve via
+GetProcAddress or import table. The function dispatches through
+__wine_unix_call_dispatcher to unix_call_funcs on the Unix side.
+
+Without this export, PE code cannot invoke Wine's Unix layer through
+the unix_call mechanism. EAC uses this to call load_so_dll
+(unix_call_funcs[0]) for loading the native anti-cheat module.
+
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3486,6 +3486,15 @@
+ }
+
+
++/***********************************************************************
++ *              __wine_unix_call
++ */
++NTSTATUS WINAPI compat___wine_unix_call( unixlib_handle_t handle, unsigned int code, void *args )
++{
++    return __wine_unix_call( handle, code, args );
++}
++
++
+ /***********************************************************************
+  *           __wine_unix_spawnvp
+  */
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1749,6 +1749,7 @@
+ # Unix interface
+ @ stdcall __wine_unix_spawnvp(long ptr)
+ @ stdcall __wine_ctrl_routine(ptr)
++@ stdcall __wine_unix_call(int64 long ptr) compat___wine_unix_call
+ @ extern -private __wine_syscall_dispatcher
+ @ extern -private __wine_unix_call_dispatcher
+ @ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec

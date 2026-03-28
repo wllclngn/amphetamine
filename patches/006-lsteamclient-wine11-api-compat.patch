@@ -1,0 +1,97 @@
+From: amphetamine <amphetamine@triskelion>
+Subject: lsteamclient: port Valve Wine path APIs to upstream Wine 11.5
+
+Replace Valve-specific wine_unix_to_nt_file_name/wine_nt_to_unix_file_name
+with upstream ntdll_get_dos_file_name/ntdll_get_unix_file_name from
+wine/unixlib.h. Applied to Proton source before building against wine-src.
+
+---
+--- a/lsteamclient/unixlib.cpp	2026-03-26 19:51:59.299166070 -0500
++++ b/lsteamclient/unixlib.cpp	2026-03-26 19:56:12.555969049 -0500
+@@ -638,20 +638,20 @@
+ 
+     WINE_TRACE( "Found Proton Soundfont at %s\n", unix_path );
+ 
+-    if ((status = wine_unix_to_nt_file_name( unix_path, NULL, &nt_path_len )) != STATUS_BUFFER_TOO_SMALL)
+     {
+-        WINE_ERR( "Failed to convert unix path to NT: %lx\n", status );
+-        return;
+-    }
+-    nt_path_len += ARRAYSIZE(SF2_NAME);
+-    dos_path = std::vector<WCHAR>(nt_path_len);
+-    if ((status = wine_unix_to_nt_file_name( unix_path, dos_path.data(), &nt_path_len )))
+-    {
+-        WINE_ERR( "Failed to convert unix path to NT: %x\n", status );
+-        return;
++        WCHAR *tmp = NULL;
++        if (ntdll_get_dos_file_name( unix_path, &tmp, 0 ) || !tmp)
++        {
++            WINE_ERR( "Failed to convert unix path to DOS\n" );
++            return;
++        }
++        nt_path_len = wcslen( tmp );
++        dos_path = std::vector<WCHAR>( nt_path_len + ARRAYSIZE(SF2_NAME) + 2 );
++        wcscpy( dos_path.data(), tmp );
++        free( tmp );
+     }
+-    dos_path[nt_path_len - 1] = u'\\';
+-    wcscpy( dos_path.data() + nt_path_len, SF2_NAME );
++    dos_path[nt_path_len] = u'\\';
++    wcscpy( dos_path.data() + nt_path_len + 1, SF2_NAME );
+ 
+     WINE_TRACE( "GM file path %s\n", wine_dbgstr_w(dos_path.data()) );
+ 
+@@ -908,21 +908,8 @@
+     ULONG size = 256;
+     char *buffer;
+ 
+-    nt_name.Buffer = (WCHAR *)path;
+-    nt_name.MaximumLength = nt_name.Length = lstrlenW( path ) * sizeof(WCHAR);
+-    InitializeObjectAttributes( &attr, &nt_name, 0, 0, NULL );
+-    for (;;)
+-    {
+-        if (!(buffer = (char *)malloc( size ))) return NULL;
+-        status = wine_nt_to_unix_file_name( &attr, buffer, &size, FILE_OPEN_IF );
+-        if (status != STATUS_BUFFER_TOO_SMALL) break;
+-        free( buffer );
+-    }
+-    if (status && status != STATUS_NO_SUCH_FILE)
+-    {
+-        free( buffer );
++    if (ntdll_get_unix_file_name( path, &buffer, 0 ))
+         return NULL;
+-    }
+     return buffer;
+ }
+ 
+@@ -1160,26 +1147,18 @@
+         dst_bytes -= 7;
+     }
+ 
+-    status = wine_unix_to_nt_file_name( src, NULL, &size );
+-    if (status != STATUS_BUFFER_TOO_SMALL)
++    dosW = NULL;
++    if (ntdll_get_dos_file_name( src, &dosW, 0 ) || !dosW)
+     {
+         WARN( "Unable to convert unix filename to DOS: %s.\n", debugstr_a(src) );
+         *dst = 0;
+         return 0;
+     }
+ 
+-    dosW = (WCHAR *)malloc( size * sizeof(WCHAR) );
+-    status = wine_unix_to_nt_file_name( src, dosW, &size );
+-    if (!status) r = ntdll_wcstoumbs( dosW, size, dst, dst_bytes, FALSE );
+-    else *dst = 0;
++    size = wcslen( dosW );
++    r = ntdll_wcstoumbs( dosW, size, dst, dst_bytes, FALSE );
+     free( dosW );
+ 
+-    if (!strncmp( dst, "\\??\\", 4 ))
+-    {
+-        memmove( dst, dst + 4, r - 4 );
+-        r -= 4;
+-    }
+-
+     TRACE( "-> dst %s, r %u\n", debugstr_a(dst), r );
+     return r;
+ }

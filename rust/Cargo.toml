@@ -1,0 +1,15 @@
+[package]
+name = "triskelion"
+version = "0.13.0"
+edition = "2024"
+license = "GPL-2.0-only"
+description = "Single-threaded wineserver replacement for amphetamine"
+
+[[bin]]
+name = "triskelion"
+path = "src/main.rs"
+
+
+[dependencies]
+libc = "0.2"
+rustc-hash = "2"

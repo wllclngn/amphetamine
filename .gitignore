@@ -6,7 +6,7 @@ target/
 __pycache__/
 
 # Binary (built by cargo build --release)
-triskelion
+amphetamine
 
 # Editor / tooling
 .claude/

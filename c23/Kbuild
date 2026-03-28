@@ -1,0 +1,4 @@
+obj-m := amphetamine_kmod.o
+amphetamine_kmod-y := amphetamine_main.o amphetamine_objects.o amphetamine_sync.o amphetamine_queue.o amphetamine_dispatch.o amphetamine_relay.o
+
+ccflags-y := -Wall -Wextra

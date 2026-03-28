@@ -1,0 +1,23 @@
+From: amphetamine <amphetamine@localhost>
+Subject: [PATCH] kernelbase: Substitute calling process PID for magic Steam PID 0xfffe
+
+Steam's steam.exe helper writes PID 0xfffe to the registry at
+HKCU\Software\Valve\Steam\ActiveProcess\PID. Games read this and call
+OpenProcess(0xfffe) to verify Steam is alive. Since we run our own
+steam.exe builtin (not the Windows Steam client), substitute the
+caller's own PID so the check succeeds.
+
+Ported from wine-valve (Proton).
+
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -1104,6 +1104,9 @@
+
+     InitializeObjectAttributes( &attr, NULL, inherit ? OBJ_INHERIT : 0, 0, NULL );
+
++    /* Steam ActiveProcess registry PID hack: games query 0xfffe to check if Steam is alive. */
++    if (id == 0xfffe) id = GetCurrentProcessId();
++
+     cid.UniqueProcess = ULongToHandle(id);
+     cid.UniqueThread  = 0;
+

@@ -1,0 +1,48 @@
+From: amphetamine <amphetamine@localhost>
+Subject: [PATCH] kernelbase: Set PROTON_EAC_LAUNCHER_PROCESS for EAC launcher exes
+
+When CreateProcessInternalW spawns a process whose name matches known
+EasyAntiCheat launcher patterns (start_protected_game.exe), set
+PROTON_EAC_LAUNCHER_PROCESS=1 in the child's environment. This tells
+ntdll's loadorder to use the native EAC DLL (the launcher needs native
+to download the Linux module) instead of the builtin bridge.
+
+Simplified from wine-valve (Proton) — uses filename matching instead
+of PE version resource product name query.
+
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -564,6 +564,30 @@
+     if (!(params = create_process_params( app_name, tidy_cmdline, cur_dir, env, flags, startup_info )))
+     {
+         status = STATUS_NO_MEMORY;
+         goto done;
+     }
+
++    /* EAC launcher detection: set PROTON_EAC_LAUNCHER_PROCESS for known
++     * EasyAntiCheat launcher executables so ntdll loads native EAC DLLs
++     * (the launcher downloads the Linux anti-cheat module). The actual
++     * game process will NOT have this set, so it uses the builtin bridge. */
++    {
++        static const WCHAR protectedW[] = L"start_protected_game.exe";
++        const WCHAR *exe_base = app_name ? wcsrchr( app_name, '\\' ) : NULL;
++        if (!exe_base) exe_base = app_name ? wcsrchr( app_name, '/' ) : NULL;
++        exe_base = exe_base ? exe_base + 1 : app_name;
++        if (exe_base && !wcsicmp( exe_base, protectedW ))
++        {
++            UNICODE_STRING name, value;
++            WCHAR *new_env = RtlAllocateHeap( GetProcessHeap(), 0, params->EnvironmentSize + 128 * sizeof(WCHAR) );
++            memcpy( new_env, params->Environment, params->EnvironmentSize );
++            RtlDestroyProcessParameters( params );
++            RtlInitUnicodeString( &name, L"PROTON_EAC_LAUNCHER_PROCESS" );
++            RtlInitUnicodeString( &value, L"1" );
++            RtlSetEnvironmentVariable( &new_env, &name, &value );
++            params = create_process_params( app_name, tidy_cmdline, cur_dir, new_env,
++                                            flags | CREATE_UNICODE_ENVIRONMENT, startup_info );
++            RtlFreeHeap( GetProcessHeap(), 0, new_env );
++            if (!params) { status = STATUS_NO_MEMORY; goto done; }
++        }
++    }
++
+     if (flags & (DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS))
+     {

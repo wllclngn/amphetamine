@@ -40,9 +40,12 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_DIR = SCRIPT_DIR.parent
-RUST_DIR = PROJECT_DIR / "amphetamine"
+RUST_DIR = PROJECT_DIR / "rust"
 
-STEAM_ROOT = Path.home() / ".steam" / "root"
+sys.path.insert(0, str(SCRIPT_DIR))
+from util import _USER_HOME, AMP_DIR_STR
+
+STEAM_ROOT = _USER_HOME / ".steam" / "root"
 STEAMAPPS = STEAM_ROOT / "steamapps"
 COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d" / "amphetamine"
 BIN_DIR = COMPAT_DIR / "files" / "bin"
@@ -50,7 +53,7 @@ BIN_DIR = COMPAT_DIR / "files" / "bin"
 TRISKELION_BIN = PROJECT_DIR / "target" / "release" / "triskelion"
 TMP_DIR = Path("/tmp/amphetamine")
 STATS_FILE = TMP_DIR / "triskelion_opcode_stats.txt"
-LOG_DIR = Path.home() / ".cache" / "amphetamine"
+LOG_DIR = _USER_HOME / ".cache" / "amphetamine"
 LOG_FILE = TMP_DIR / "triskelion-tests.log"
 RESULTS_DIR = TMP_DIR / "triskelion-results"
 
@@ -203,12 +206,15 @@ def find_wine_pid(app_id, diagnostic=False):
 
 
 def find_triskelion_pid():
-    """Find a running triskelion process."""
+    """Find a running triskelion process scoped to amphetamine."""
     try:
-        result = subprocess.run(["pgrep", "-f", "triskelion.*server|wineserver"],
-                                capture_output=True, text=True, timeout=5)
-        if result.returncode == 0 and result.stdout.strip():
-            return int(result.stdout.strip().splitlines()[0].split()[0])
+        # Match triskelion by name, or wineserver scoped to amphetamine dir.
+        # Never match bare 'wineserver' -- that hits Proton's running instance.
+        for pattern in ["triskelion", f"{AMP_DIR_STR}.*wineserver"]:
+            result = subprocess.run(["pgrep", "-f", pattern],
+                                    capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                return int(result.stdout.strip().splitlines()[0].split()[0])
     except (subprocess.TimeoutExpired, ValueError):
         pass
     return None
@@ -382,21 +388,21 @@ def profile_game(app_id, name, duration, launch_timeout=60):
 
     if not wine_pid:
         log(f"  No wine process found after {launch_timeout}s")
-        # Dump what IS running for diagnosis
+        # Read-only diagnostic dump scoped to amphetamine -- never used for kill
         try:
-            ps = subprocess.run(["pgrep", "-a", "-f", "wine|proton|triskelion"],
+            ps = subprocess.run(["pgrep", "-a", "-f", f"{AMP_DIR_STR}|triskelion"],
                                 capture_output=True, text=True, timeout=5)
             if ps.stdout.strip():
-                log(f"  Related processes running:")
+                log(f"  Amphetamine-related processes running:")
                 for line in ps.stdout.strip().splitlines()[:10]:
                     log(f"    {line[:150]}")
             else:
-                log(f"  No wine/proton/triskelion processes found at all")
+                log(f"  No amphetamine/triskelion processes found at all")
         except subprocess.TimeoutExpired:
             pass
 
         # Check Steam's recent log for errors
-        steam_log = Path.home() / ".steam" / "steam" / "logs" / "console-linux.txt"
+        steam_log = _USER_HOME / ".steam" / "steam" / "logs" / "console-linux.txt"
         if steam_log.exists():
             try:
                 text = steam_log.read_text(errors="replace")
@@ -436,8 +442,9 @@ def profile_game(app_id, name, duration, launch_timeout=60):
         log(f"  {name}: clean exit")
     else:
         log(f"  {name}: processes lingered after SIGTERM, sending SIGKILL")
+        # Scope straggler sweep to amphetamine dir, with environ double-check
         try:
-            result = subprocess.run(["pgrep", "-a", "wine"],
+            result = subprocess.run(["pgrep", "-a", "-f", AMP_DIR_STR],
                                     capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
                 for line in result.stdout.strip().splitlines():

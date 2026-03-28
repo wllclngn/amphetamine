@@ -1,0 +1,40 @@
+Remove fatal assert and RaiseException from lsteamclient.
+
+The native steamclient.so throws C++ exceptions (0xe24c4a02) during init
+that Wine's signal handler converts to STATUS_ACCESS_VIOLATION. The assert
+in STEAMCLIENT_CALL kills the process, and the RaiseException turns it into
+an unhandled Win32 exception that crashes the game after ~30 seconds.
+
+With both removed, the error propagates gracefully via return code. Games
+that handle SteamAPI_Init failure continue running. Games that require
+Steam will exit on their own terms instead of crashing.
+
+--- a/lsteamclient/steamclient_main.c
++++ b/lsteamclient/steamclient_main.c
+@@ -84,12 +84,10 @@
+ {
+     NTSTATUS status = WINE_UNIX_CALL( code, args );
+
+-    if (status == STATUS_ACCESS_VIOLATION)
+-    {
+-        ERR( "Access violation in %s.\n", name );
+-        RaiseException( status, 0, 0, NULL );
+-    }
+-    if (status) WARN( "%s failed, status %#x\n", name, (UINT)status );
++    if (status == STATUS_ACCESS_VIOLATION)
++        ERR( "Access violation in %s (non-fatal).\n", name );
++    else if (status)
++        WARN( "%s failed, status %#x\n", name, (UINT)status );
+     return status;
+ }
+
+--- a/lsteamclient/unixlib.h
++++ b/lsteamclient/unixlib.h
+@@ -406,7 +406,6 @@
+ #define STEAMCLIENT_CALL( code, args )                                     \
+     ({                                                                     \
+         NTSTATUS status = steamclient_call( unix_ ## code, args, #code );  \
+-        assert( !status );                                                 \
+         status;                                                            \
+     })
+

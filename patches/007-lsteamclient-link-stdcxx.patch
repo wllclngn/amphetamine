@@ -1,0 +1,17 @@
+From: amphetamine <amphetamine@triskelion>
+Subject: lsteamclient: link libstdc++ for Unix .so
+
+Upstream Wine doesn't auto-link libstdc++ for C++ unix libs.
+Add UNIX_LIBS = -lstdc++ to resolve operator delete.
+
+---
+--- a/lsteamclient/Makefile.in	2026-03-26 19:54:14.404017763 -0500
++++ b/lsteamclient/Makefile.in	2026-03-26 19:54:36.205828144 -0500
+@@ -3,6 +3,7 @@
+ IMPORTS   = user32 ws2_32
+ 
+ EXTRADEFS = -DSTEAM_API_EXPORTS -Dprivate=public -Dprotected=public
++UNIX_LIBS = -lstdc++
+ 
+ SOURCES = \
+ 	steam_input_manual.c \
