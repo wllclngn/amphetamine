@@ -1,4 +1,4 @@
-From: amphetamine <amphetamine@triskelion>
+From: quark <quark@triskelion>
 Subject: configure: register lsteamclient DLL in Wine build system
 
 Adds WINE_CONFIG_MAKEFILE entry so lsteamclient builds as a Wine DLL.

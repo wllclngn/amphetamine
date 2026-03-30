@@ -25,7 +25,7 @@ _USER_HOME = Path(f"/home/{os.environ.get('SUDO_USER', os.environ.get('USER', 'm
 
 MONTAUK = _USER_HOME / "personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/montauk"
 STEAM_ROOT = _USER_HOME / ".local/share/Steam"
-AMP_DIR = STEAM_ROOT / "compatibilitytools.d/amphetamine"
+AMP_DIR = STEAM_ROOT / "compatibilitytools.d/quark"
 GAME_EXE = STEAM_ROOT / "steamapps/common/Balatro/Balatro.exe"
 COMPAT_DATA = STEAM_ROOT / "steamapps/compatdata/2379780"
 PFX = COMPAT_DATA / "pfx"
@@ -34,7 +34,7 @@ PFX = COMPAT_DATA / "pfx"
 PROTON_DIR = STEAM_ROOT / "steamapps/common/Proton 10.0"
 PROTON_BIN = PROTON_DIR / "proton"
 
-TRACE_DIR = Path("/tmp/amphetamine/fused_exe_trace")
+TRACE_DIR = Path("/tmp/quark/fused_exe_trace")
 STOCK_TRACE = TRACE_DIR / "stock"
 AMP_TRACE = TRACE_DIR / "amp"
 
@@ -45,7 +45,7 @@ INTERESTING_FILES = ["balatro", "love", ".exe", ".dll", ".love"]
 
 
 def kill_all():
-    """Kill amphetamine/triskelion test processes only — never touch stock Proton.
+    """Kill quark/triskelion test processes only — never touch stock Proton.
 
     CRITICAL: pkill -f 'wine' would kill ALL wine processes system-wide,
     including Proton's wineserver for other running games. SIGKILL mid-operation
@@ -53,12 +53,12 @@ def kill_all():
     which makes Proton appear 'broken' until the prefix is repaired.
 
     We only kill: our triskelion daemon, montauk, and wine processes spawned
-    from amphetamine's compat tool directory."""
+    from quark's compat tool directory."""
     # Kill triskelion daemon and montauk tracer — safe, these are ours
     for pat in ["triskelion", "montauk"]:
         subprocess.run(["pkill", "-9", "-f", pat], capture_output=True)
-    # Kill wine processes from amphetamine's directory ONLY (not system/Proton wine)
-    amp_bin = str(_USER_HOME / ".local/share/Steam/compatibilitytools.d/amphetamine")
+    # Kill wine processes from quark's directory ONLY (not system/Proton wine)
+    amp_bin = str(_USER_HOME / ".local/share/Steam/compatibilitytools.d/quark")
     subprocess.run(["pkill", "-9", "-f", amp_bin], capture_output=True)
     # Kill any wineserver in /tmp dirs that triskelion created (but not Proton's)
     subprocess.run(["pkill", "-9", "-x", "triskelion"], capture_output=True)
@@ -69,7 +69,7 @@ def run_trace(label, trace_dir, proton_bin, use_stock_proton=False):
     """Launch game + montauk --trace, capture syscall + I/O trace.
 
     Stock: uses Proton 10.0's own proton launcher (correct ABI, matching DLLs).
-    Amp: uses amphetamine's proton launcher (triskelion).
+    Amp: uses quark's proton launcher (triskelion).
     Both run as the real user (sudo -u), montauk runs as root for BPF."""
     kill_all()
     if trace_dir.exists():
@@ -318,7 +318,7 @@ def analyze_threads(data, label):
 
 
 def diff_io(stock_data, amp_data):
-    """Compare I/O operations between stock and amphetamine — the money shot."""
+    """Compare I/O operations between stock and quark — the money shot."""
     print(f"\n{'='*60}")
     print(f"  I/O DIFF: Stock vs Triskelion")
     print(f"{'='*60}")
@@ -387,7 +387,7 @@ def diff_io(stock_data, amp_data):
 
     # The verdict
     if stock_bal_io and not amp_bal_io:
-        print(f"\n  >>> VERDICT: Stock has I/O on Balatro.exe, amphetamine has NONE.")
+        print(f"\n  >>> VERDICT: Stock has I/O on Balatro.exe, quark has NONE.")
         print(f"      PhysFS never reads the exe under triskelion — file not opened or fd not tracked.")
     elif not stock_bal_io and not amp_bal_io:
         print(f"\n  >>> VERDICT: Neither has I/O on Balatro.exe in this snapshot.")
@@ -452,7 +452,7 @@ def main():
     # Triskelion run
     if not skip_amp:
         print(f"\n{'='*60}")
-        print(f"  TRISKELION (amphetamine)")
+        print(f"  TRISKELION (quark)")
         print(f"{'='*60}")
         amp_dir = run_trace("amp", AMP_TRACE, AMP_DIR, use_stock_proton=False)
         amp_data = parse_trace_prom(amp_dir)

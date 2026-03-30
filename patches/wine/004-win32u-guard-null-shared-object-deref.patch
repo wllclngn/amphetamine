@@ -1,0 +1,46 @@
+From: quark <quark@localhost>
+Subject: [PATCH] win32u: Guard against NULL shared object dereference in seqlock functions
+
+During early thread initialization (particularly winedevice service
+threads), shared session object lookups can return NULL when the
+server returns a zero locator for a thread whose queue or input
+hasn't been created yet.
+
+The seqlock acquire/release functions and shared_object_get_id
+unconditionally dereference the object pointer, causing a page
+fault at address 0x0 (seq field) or 0x8 (id field). Downstream
+callers that access object->shm.input.focus crash at 0x18.
+
+Add NULL guards to all three primitives. acquire_seqlock sets
+seq=0 and returns. release_seqlock returns TRUE to break retry
+loops. get_id returns 0. All callers already handle zero/invalid
+ids as cache misses, so this safely degrades to a server round-trip.
+
+Signed-off-by: quark <quark@localhost>
+---
+diff --git a/dlls/win32u/winstation.c b/dlls/win32u/winstation.c
+index 6190e45..96cf683 100644
+--- a/dlls/win32u/winstation.c
++++ b/dlls/win32u/winstation.c
+@@ -81,18 +81,21 @@ static struct session_thread_data *get_session_thread_data(void)
+
+ void shared_object_acquire_seqlock( const shared_object_t *object, UINT64 *seq )
+ {
++    if (!object) { *seq = 0; return; }
+     while ((*seq = ReadNoFence64( &object->seq )) & 1) YieldProcessor();
+     __SHARED_READ_FENCE;
+ }
+
+ BOOL shared_object_release_seqlock( const shared_object_t *object, UINT64 seq )
+ {
++    if (!object) return TRUE;
+     __SHARED_READ_FENCE;
+     return ReadNoFence64( &object->seq ) == seq;
+ }
+
+ static object_id_t shared_object_get_id( const shared_object_t *object )
+ {
++    if (!object) return 0;
+     struct object_lock lock = OBJECT_LOCK_INIT;
+     do
+     {

@@ -47,13 +47,13 @@ from util import _USER_HOME, AMP_DIR_STR
 
 STEAM_ROOT = _USER_HOME / ".steam" / "root"
 STEAMAPPS = STEAM_ROOT / "steamapps"
-COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d" / "amphetamine"
+COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d" / "quark"
 BIN_DIR = COMPAT_DIR / "files" / "bin"
 
 TRISKELION_BIN = PROJECT_DIR / "target" / "release" / "triskelion"
-TMP_DIR = Path("/tmp/amphetamine")
+TMP_DIR = Path("/tmp/quark")
 STATS_FILE = TMP_DIR / "triskelion_opcode_stats.txt"
-LOG_DIR = _USER_HOME / ".cache" / "amphetamine"
+LOG_DIR = _USER_HOME / ".cache" / "quark"
 LOG_FILE = TMP_DIR / "triskelion-tests.log"
 RESULTS_DIR = TMP_DIR / "triskelion-results"
 
@@ -206,9 +206,9 @@ def find_wine_pid(app_id, diagnostic=False):
 
 
 def find_triskelion_pid():
-    """Find a running triskelion process scoped to amphetamine."""
+    """Find a running triskelion process scoped to quark."""
     try:
-        # Match triskelion by name, or wineserver scoped to amphetamine dir.
+        # Match triskelion by name, or wineserver scoped to quark dir.
         # Never match bare 'wineserver' -- that hits Proton's running instance.
         for pattern in ["triskelion", f"{AMP_DIR_STR}.*wineserver"]:
             result = subprocess.run(["pgrep", "-f", pattern],
@@ -388,16 +388,16 @@ def profile_game(app_id, name, duration, launch_timeout=60):
 
     if not wine_pid:
         log(f"  No wine process found after {launch_timeout}s")
-        # Read-only diagnostic dump scoped to amphetamine -- never used for kill
+        # Read-only diagnostic dump scoped to quark -- never used for kill
         try:
             ps = subprocess.run(["pgrep", "-a", "-f", f"{AMP_DIR_STR}|triskelion"],
                                 capture_output=True, text=True, timeout=5)
             if ps.stdout.strip():
-                log(f"  Amphetamine-related processes running:")
+                log(f"  Quark-related processes running:")
                 for line in ps.stdout.strip().splitlines()[:10]:
                     log(f"    {line[:150]}")
             else:
-                log(f"  No amphetamine/triskelion processes found at all")
+                log(f"  No quark/triskelion processes found at all")
         except subprocess.TimeoutExpired:
             pass
 
@@ -442,7 +442,7 @@ def profile_game(app_id, name, duration, launch_timeout=60):
         log(f"  {name}: clean exit")
     else:
         log(f"  {name}: processes lingered after SIGTERM, sending SIGKILL")
-        # Scope straggler sweep to amphetamine dir, with environ double-check
+        # Scope straggler sweep to quark dir, with environ double-check
         try:
             result = subprocess.run(["pgrep", "-a", "-f", AMP_DIR_STR],
                                     capture_output=True, text=True, timeout=5)
@@ -1175,7 +1175,7 @@ def cmd_test_iterate(args):
         log("  Possible causes:")
         log("    1. triskelion crashed before accepting connections")
         log("    2. Wine binaries missing from compat tool directory")
-        log("    3. Steam not configured to use amphetamine for this game")
+        log("    3. Steam not configured to use quark for this game")
 
     result = {
         "test": "iterate",

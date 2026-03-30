@@ -1,4 +1,4 @@
-From: amphetamine <amphetamine@triskelion>
+From: quark <quark@triskelion>
 Subject: configure: register steam_helper program in Wine build system
 
 Adds WINE_CONFIG_MAKEFILE entry so Proton's steam_helper (steam.exe) builds

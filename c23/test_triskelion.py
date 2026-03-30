@@ -423,7 +423,7 @@ def run_tests():
 
 # ── Prometheus exposition format ──
 
-LOG_DIR = Path.home() / ".cache" / "amphetamine"
+LOG_DIR = Path.home() / ".cache" / "quark"
 
 
 def emit_prometheus(results, f):

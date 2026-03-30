@@ -1,15 +1,29 @@
 [package]
 name = "triskelion"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 license = "GPL-2.0-only"
-description = "Single-threaded wineserver replacement for amphetamine"
+description = "quark gaming stack: launcher, wineserver, display"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "quark"
+path = "src/quark/main.rs"
 
 [[bin]]
 name = "triskelion"
-path = "src/main.rs"
+path = "src/triskelion/main.rs"
 
+[[bin]]
+name = "parallax"
+path = "src/parallax/main.rs"
 
 [dependencies]
 libc = "0.2"
 rustc-hash = "2"
+flume = "0.11"
+rtrb = "0.3"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

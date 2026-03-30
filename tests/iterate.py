@@ -28,11 +28,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUST_DIR = REPO_ROOT / "rust"
 CARGO_TARGET = REPO_ROOT / "target/release/triskelion"
+CARGO_QUARK = REPO_ROOT / "target/release/quark"
+CARGO_PARALLAX = REPO_ROOT / "target/release/parallax"
 REPO_BINARY = REPO_ROOT / "triskelion"
 _USER_HOME = Path(f"/home/{os.environ.get('SUDO_USER', os.environ.get('USER', 'mod'))}")
 STEAM_ROOT = _USER_HOME / ".local/share/Steam"
 STEAMAPPS = STEAM_ROOT / "steamapps"
-COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d/amphetamine"
+COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d/quark"
 PROTON_BIN = COMPAT_DIR / "proton"
 
 def clock_raw_ns() -> int:
@@ -57,12 +59,12 @@ def log_warn(msg: str) -> None:
 def log_error(msg: str) -> None:
     print(f"{_timestamp()} [ERROR]  {msg}", flush=True)
 
-DAEMON_LOG = Path("/tmp/amphetamine/daemon.log")
-OPCODE_STATS = Path("/tmp/amphetamine/triskelion_opcode_stats.txt")
+DAEMON_LOG = Path("/tmp/quark/daemon.log")
+OPCODE_STATS = Path("/tmp/quark/triskelion_opcode_stats.txt")
 SHM_GLOB = "/dev/shm/triskelion-*"
-WINE_INIT_GLOB = "/tmp/amphetamine/wine_init_*.log"
+WINE_INIT_GLOB = "/tmp/quark/wine_init_*.log"
 
-DEFAULT_APPID = "2379780"  # Balatro
+DEFAULT_APPID = "570940"  # DARK SOULS: REMASTERED
 DEFAULT_TIMEOUT = 30
 
 # ── Opcode implementation status ─────────────────────────────────────
@@ -323,7 +325,7 @@ def check_daemon_health() -> tuple:
     except (subprocess.TimeoutExpired, ValueError):
         pass
 
-    # Also check /tmp/amphetamine for socket liveness
+    # Also check /tmp/quark for socket liveness
     for sock_dir in Path("/tmp").glob(".wine-*/server-*"):
         sock = sock_dir / "socket"
         if sock.exists():
@@ -408,14 +410,14 @@ def find_game(app_id: str) -> tuple:
 # ── Process management ────────────────────────────────────────────────
 
 def cleanup_processes():
-    """Kill amphetamine/triskelion test processes and their Wine children.
+    """Kill quark/triskelion test processes and their Wine children.
 
     Wine child processes (services.exe, wineboot.exe, Balatro.exe, etc.) run as
-    system Wine binaries — their cmdline shows Windows exe paths, not the amphetamine
+    system Wine binaries — their cmdline shows Windows exe paths, not the quark
     directory. We must also kill these or they persist as zombies across test runs.
 
     Safe: we identify children by checking if their parent chain includes a process
-    from the amphetamine compat tool directory, OR if they're orphaned Wine processes
+    from the quark compat tool directory, OR if they're orphaned Wine processes
     from our prefix (compatdata/2379780)."""
     amp_dir = str(COMPAT_DIR)
     uid = os.getuid()
@@ -425,7 +427,7 @@ def cleanup_processes():
                    capture_output=True, timeout=5)
     time.sleep(0.3)
 
-    # Phase 2: Kill amphetamine-spawned processes (scoped to our directory)
+    # Phase 2: Kill quark-spawned processes (scoped to our directory)
     for pattern in [f"{amp_dir}/proton",
                      f"{amp_dir}/lib/wine",
                      f"{amp_dir}/bin/wine",
@@ -435,7 +437,7 @@ def cleanup_processes():
     time.sleep(0.5)
 
     # Phase 3: Kill orphaned Wine child processes (.exe processes, wineserver)
-    # These don't match the amphetamine directory but are from our test session.
+    # These don't match the quark directory but are from our test session.
     # Identify by: running as .exe (Wine PE), or wineserver with our prefix inode.
     try:
         result = subprocess.run(["ps", "-u", str(uid), "-o", "pid,args", "--no-headers"],
@@ -447,7 +449,7 @@ def cleanup_processes():
                 if len(parts) < 2:
                     continue
                 pid_str, cmdline = parts
-                # Skip if it looks like a stock Proton process (contains Proton path but NOT amphetamine)
+                # Skip if it looks like a stock Proton process (contains Proton path but NOT quark)
                 if "Proton" in cmdline and amp_dir not in cmdline:
                     continue
                 if any(pat in cmdline for pat in wine_exe_patterns):
@@ -650,8 +652,22 @@ def install() -> bool:
         return False
 
     try:
-        shutil.copy2(str(CARGO_TARGET), str(REPO_BINARY))
-        shutil.copy2(str(CARGO_TARGET), str(PROTON_BIN))
+        # Deploy all three binaries using atomic rename to avoid ETXTBSY.
+        # If the old binary is still mapped by a running process, copy+rename
+        # succeeds because rename replaces the directory entry while the old
+        # inode stays alive until the last process closes it.
+        for name, src in [("triskelion", CARGO_TARGET), ("quark", CARGO_QUARK), ("parallax", CARGO_PARALLAX)]:
+            if src.exists():
+                for dst_dir in [REPO_ROOT, COMPAT_DIR]:
+                    dst = dst_dir / name
+                    tmp = dst_dir / f".{name}.tmp"
+                    shutil.copy2(str(src), str(tmp))
+                    os.rename(str(tmp), str(dst))
+        # proton symlink -> quark (the launcher)
+        proton_link = COMPAT_DIR / "proton"
+        if proton_link.exists() or proton_link.is_symlink():
+            proton_link.unlink()
+        proton_link.symlink_to("quark")
     except (OSError, shutil.SameFileError) as e:
         log_error(f"install: {e}")
         return False
@@ -662,7 +678,7 @@ def install() -> bool:
             os.unlink(p)
         except OSError:
             pass
-    os.makedirs("/tmp/amphetamine", exist_ok=True)
+    os.makedirs("/tmp/quark", exist_ok=True)
     log_info(f"install: deployed to {PROTON_BIN}")
     return True
 
@@ -737,7 +753,7 @@ def parse_daemon_log() -> DaemonReport:
 
 # ── Stderr analysis ──────────────────────────────────────────────────
 
-WINE_STDERR_LOG = Path("/tmp/amphetamine/wine_stderr.log")
+WINE_STDERR_LOG = Path("/tmp/quark/wine_stderr.log")
 
 def _collect_stderr_analysis() -> str:
     """Parse daemon stderr + wine stderr for NOT_IMPLEMENTED opcodes and crashes."""
@@ -786,7 +802,7 @@ def launch_and_monitor(app_id: str, game_name: str, exe_path: str,
     env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(STEAM_ROOT)
     env["SteamAppId"] = app_id
     env["SteamGameId"] = app_id
-    env["WINEDEBUG"] = os.environ.get("AMPHETAMINE_WINEDEBUG", "+driver,+loaddll,+wgl,+x11drv,+system,err")
+    env["WINEDEBUG"] = os.environ.get("QUARK_WINEDEBUG", "+driver,+loaddll,+wgl,+x11drv,+system,err")
     #env["LD_DEBUG"] = "libs"
     # Ensure display vars are passed through
     for var in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY"):
@@ -803,7 +819,7 @@ def launch_and_monitor(app_id: str, game_name: str, exe_path: str,
             env=env,
             cwd="/tmp",
             stdout=subprocess.PIPE,
-            stderr=open("/tmp/amphetamine/wine_stderr.log", "w"),
+            stderr=open("/tmp/quark/wine_stderr.log", "w"),
         )
     except OSError as e:
         return ("launch_fail", 0, DaemonReport(), [], f"Failed to start: {e}", None)

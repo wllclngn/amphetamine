@@ -2,7 +2,7 @@
 """Trace a stock Proton 10.0 launch of Balatro to capture wineserver protocol traffic.
 
 Captures WINEDEBUG=+server output which shows every wineserver request/reply,
-giving us the exact blueprint for what amphetamine needs to handle.
+giving us the exact blueprint for what quark needs to handle.
 
 Usage:
     python3 tests/trace_stock_proton.py                # Default 30s timeout
@@ -25,7 +25,7 @@ PROTON_DIR = STEAMAPPS / "common" / "Proton - Experimental"
 PROTON_BIN = PROTON_DIR / "proton"
 GAME_EXE = STEAMAPPS / "common" / "Balatro" / "Balatro.exe"
 COMPAT_DATA = STEAMAPPS / "compatdata" / "2379780"
-TRACE_DIR = Path("/tmp/amphetamine/trace")
+TRACE_DIR = Path("/tmp/quark/trace")
 TRACE_LOG = TRACE_DIR / "wine_server_trace.log"
 FILTERED_LOG = TRACE_DIR / "display_init_trace.log"
 

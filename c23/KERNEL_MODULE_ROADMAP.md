@@ -1,4 +1,4 @@
-# Triskelion Kernel Module (`/dev/amphetamine`) — Roadmap
+# Triskelion Kernel Module (`/dev/quark`) — Roadmap
 
 ## Current State
 
@@ -19,8 +19,8 @@ The C23 kernel module is **90% structurally complete** at ~4,000 LOC. Sync primi
 
 ### 1. Kbuild Object Name Mismatch
 **File:** `c23/Kbuild`
-**Problem:** Kbuild references `amphetamine_*.o` but source files are named `triskelion_*.c`. Module will NOT link.
-**Fix:** Rename sources to `amphetamine_*.c` OR update Kbuild to reference `triskelion_*.o`.
+**Problem:** Kbuild references `quark_*.o` but source files are named `triskelion_*.c`. Module will NOT link.
+**Fix:** Rename sources to `quark_*.c` OR update Kbuild to reference `triskelion_*.o`.
 
 ---
 

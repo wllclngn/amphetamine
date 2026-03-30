@@ -3,7 +3,7 @@ Triskelion Wine Patches
 Apply to Valve's Wine 10.0 fork (proton_10.0 branch).
 
 AUTOMATED: Run `python3 install.py` to clone Wine source to
-~/.local/share/amphetamine/wine-src/ and apply all patches below
+~/.local/share/quark/wine-src/ and apply all patches below
 automatically. The script is idempotent (safe to run multiple times).
 
 Manual steps are documented below for reference.

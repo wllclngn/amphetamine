@@ -1,0 +1,44 @@
+// PARALLAX Lanczos-2 downscale compute shader
+// Dispatched once per output per frame when DSR multiplier > 1.0
+// 8x8 workgroups, one invocation per output pixel
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D src;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D dst;
+
+layout(push_constant) uniform PushConstants {
+    vec2 scale;    // output_size / input_size
+    vec2 src_size; // input texture dimensions
+};
+
+float lanczos(float x) {
+    if (x == 0.0) return 1.0;
+    if (abs(x) >= 2.0) return 0.0;
+    float pi_x = x * 3.14159265;
+    return (sin(pi_x) / pi_x) * (sin(pi_x * 0.5) / (pi_x * 0.5));
+}
+
+vec4 sample_lanczos(vec2 center) {
+    vec4 color = vec4(0.0);
+    float weight_sum = 0.0;
+    for (int y = -1; y <= 2; y++) {
+        for (int x = -1; x <= 2; x++) {
+            vec2 sample_pos = floor(center) + 0.5 + vec2(float(x), float(y));
+            vec2 dist = center - sample_pos;
+            float w = lanczos(dist.x) * lanczos(dist.y);
+            color += texture(src, sample_pos / src_size) * w;
+            weight_sum += w;
+        }
+    }
+    return color / weight_sum;
+}
+
+void main() {
+    uvec2 coord = gl_GlobalInvocationID.xy;
+    uvec2 out_size = imageSize(dst);
+    if (coord.x >= out_size.x || coord.y >= out_size.y) return;
+    vec2 src_coord = (vec2(coord) + 0.5) / scale;
+    imageStore(dst, ivec2(coord), sample_lanczos(src_coord));
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Side-by-side montauk comparison: stock Proton vs amphetamine.
+"""Side-by-side montauk comparison: stock Proton vs quark.
 
 Uses montauk v5.2.0 --trace --log to capture Prometheus-format snapshots
 with per-thread state, syscall, and I/O details. Parses .prom files for
@@ -12,7 +12,7 @@ Stock phase launches through Proton 10.0 (not bare wine).
 Usage:
     python3 tests/montauk_compare.py                # Both runs, 30s each
     python3 tests/montauk_compare.py --stock-only   # Stock Proton only
-    python3 tests/montauk_compare.py --amph-only    # Amphetamine only
+    python3 tests/montauk_compare.py --amph-only    # Quark only
     python3 tests/montauk_compare.py --timeout 45   # Longer capture
     python3 tests/montauk_compare.py --appid 2320   # Different game
 """
@@ -28,7 +28,7 @@ from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from util import (kill_amphetamine_processes, get_game_exe, STEAM_ROOT, _USER_HOME)
+from util import (kill_quark_processes, get_game_exe, STEAM_ROOT, _USER_HOME)
 
 def _timestamp() -> str:
     return datetime.now().strftime("[%H:%M:%S]")
@@ -43,12 +43,12 @@ def log_error(msg: str) -> None:
     print(f"{_timestamp()} [ERROR]  {msg}", flush=True)
 
 STEAMAPPS = STEAM_ROOT / "steamapps"
-COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d/amphetamine"
+COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d/quark"
 PROTON_DIR = STEAMAPPS / "common" / "Proton 10.0"
 PROTON_BIN = PROTON_DIR / "proton"
 ITERATE_PY = Path(__file__).resolve().parent / "iterate.py"
 
-OUT_DIR = Path("/tmp/amphetamine/montauk_compare")
+OUT_DIR = Path("/tmp/quark/montauk_compare")
 
 # Prometheus metric names we parse from .prom log files
 METRIC_PROCESS  = "montauk_trace_process_info"
@@ -229,8 +229,8 @@ def extract_snapshots(blocks):
 # Launch helpers
 
 def kill_all():
-    """Kill amphetamine processes only. Never touch Proton or stock Wine state."""
-    kill_amphetamine_processes()
+    """Kill quark processes only. Never touch Proton or stock Wine state."""
+    kill_quark_processes()
     # Only clean triskelion SHM -- never wine-* (that's Proton's)
     subprocess.run("rm -f /dev/shm/triskelion-* 2>/dev/null",
                    shell=True, capture_output=True)
@@ -330,9 +330,9 @@ def run_stock_wine(timeout, appid, trace_pattern):
     env["SteamAppId"] = str(appid)
     env["SteamGameId"] = str(appid)
     env["WINEDEBUG"] = "-all"
-    # Ensure stock wineserver -- remove any amphetamine overrides
+    # Ensure stock wineserver -- remove any quark overrides
     env.pop("WINESERVER", None)
-    env.pop("AMPHETAMINE_VERBOSE", None)
+    env.pop("QUARK_VERBOSE", None)
     # Display vars
     for var in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY"):
         if var in os.environ:
@@ -404,12 +404,12 @@ def run_stock_wine(timeout, appid, trace_pattern):
     return log_dir
 
 
-def run_amphetamine(timeout, appid, trace_pattern):
+def run_quark(timeout, appid, trace_pattern):
     """Launch game via iterate.py with montauk tracing.
 
     Script runs as user. Only montauk needs sudo (for BPF).
     """
-    log_info(f"amphetamine [{trace_pattern}]")
+    log_info(f"quark [{trace_pattern}]")
 
     kill_all()
     log_dir = OUT_DIR / "amph_logs"
@@ -615,13 +615,13 @@ def print_fd_table(label, fd_map):
 
 
 def diff_traces(stock_dir, amph_dir):
-    """Full structured comparison between stock and amphetamine traces."""
-    log_info("comparison: stock wine vs amphetamine")
+    """Full structured comparison between stock and quark traces."""
+    log_info("comparison: stock wine vs quark")
 
     stock_snaps = load_trace(stock_dir)
     amph_snaps = load_trace(amph_dir)
 
-    log_info(f"stock: {len(stock_snaps)} snapshots, amphetamine: {len(amph_snaps)} snapshots")
+    log_info(f"stock: {len(stock_snaps)} snapshots, quark: {len(amph_snaps)} snapshots")
 
     # Process names
     stock_procs = process_names(stock_snaps)
@@ -629,27 +629,27 @@ def diff_traces(stock_dir, amph_dir):
 
     log_info("process names")
     print(f"  stock only:       {sorted(stock_procs - amph_procs) or '(none)'}")
-    print(f"  amphetamine only: {sorted(amph_procs - stock_procs) or '(none)'}")
+    print(f"  quark only: {sorted(amph_procs - stock_procs) or '(none)'}")
     print(f"  both:             {sorted(stock_procs & amph_procs) or '(none)'}")
 
     # Thread state
     stock_threads = thread_state_summary(stock_snaps)
     amph_threads = thread_state_summary(amph_snaps)
     print_thread_table("Stock Wine", stock_threads)
-    print_thread_table("Amphetamine", amph_threads)
+    print_thread_table("Quark", amph_threads)
 
     # Thread differences
     stock_comms = set(stock_threads.keys())
     amph_comms = set(amph_threads.keys())
     log_info("thread differences")
     print(f"  stock only:       {sorted(stock_comms - amph_comms) or '(none)'}")
-    print(f"  amphetamine only: {sorted(amph_comms - stock_comms) or '(none)'}")
+    print(f"  quark only: {sorted(amph_comms - stock_comms) or '(none)'}")
 
     # I/O comparison
     stock_io = io_summary(stock_snaps)
     amph_io = io_summary(amph_snaps)
     print_io_table("Stock Wine", stock_io)
-    print_io_table("Amphetamine", amph_io)
+    print_io_table("Quark", amph_io)
 
     # I/O differences: comms that do I/O in one but not the other
     stock_io_comms = set(stock_io.keys())
@@ -661,16 +661,16 @@ def diff_traces(stock_dir, amph_dir):
         if diff_stock:
             print(f"  i/o in stock only:       {sorted(diff_stock)}")
         if diff_amph:
-            print(f"  i/o in amphetamine only: {sorted(diff_amph)}")
+            print(f"  i/o in quark only: {sorted(diff_amph)}")
 
     # FD tables
     stock_fds = fd_summary(stock_snaps)
     amph_fds = fd_summary(amph_snaps)
     print_fd_table("Stock Wine", stock_fds)
-    print_fd_table("Amphetamine", amph_fds)
+    print_fd_table("Quark", amph_fds)
 
     # Peak snapshot (most threads)
-    for label, snaps in [("Stock Wine", stock_snaps), ("Amphetamine", amph_snaps)]:
+    for label, snaps in [("Stock Wine", stock_snaps), ("Quark", amph_snaps)]:
         if snaps:
             peak = max(snaps, key=lambda s: len(s.threads))
             log_info(f"peak snapshot: {label} ({len(peak.threads)} threads, "
@@ -716,7 +716,7 @@ def main():
     # Auto-detect trace pattern from game exe name if not specified
     trace_pattern = args.pattern
     if not trace_pattern:
-        # For stock: trace "wineserver", for amphetamine: trace "triskelion"
+        # For stock: trace "wineserver", for quark: trace "triskelion"
         # Use a broad pattern that catches both wine process trees
         game_exe = get_game_exe(args.appid)
         if game_exe:
@@ -736,21 +736,21 @@ def main():
     if not args.amph_only:
         # Stock Proton: trace "wine" to catch the full process tree
         # (wineserver, wine-preloader, wine64, all .exe clients).
-        # Phases run sequentially so "wine" won't cross-match amphetamine.
+        # Phases run sequentially so "wine" won't cross-match quark.
         stock_dir = run_stock_wine(args.timeout, args.appid, "wine")
 
     if not args.stock_only:
-        # Amphetamine: trace "wine" to catch wineserver (daemon), wine-preloader
+        # Quark: trace "wine" to catch wineserver (daemon), wine-preloader
         # (client loader), and all Wine threads (wine_rpcrt4_ser, etc.).
         # BPF matches exec path AND comm — "wine" covers the full process group.
-        amph_dir = run_amphetamine(args.timeout, args.appid, "wine")
+        amph_dir = run_quark(args.timeout, args.appid, "wine")
 
     if stock_dir and amph_dir:
         diff_traces(stock_dir, amph_dir)
     elif stock_dir:
         print_single("Stock Wine", stock_dir)
     elif amph_dir:
-        print_single("Amphetamine", amph_dir)
+        print_single("Quark", amph_dir)
 
     log_info("files:")
     if stock_dir:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch amphetamine and observe: prefix setup, services, pipes, window creation.
+"""Launch quark and observe: prefix setup, services, pipes, window creation.
 
 Usage:
     python3 tests/launch_observe.py [--timeout 30]
@@ -13,19 +13,19 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from util import kill_amphetamine_processes, STEAM_ROOT
+from util import kill_quark_processes, STEAM_ROOT
 
 TIMEOUT = int(sys.argv[sys.argv.index("--timeout") + 1]) if "--timeout" in sys.argv else 30
-PROTON_BIN = STEAM_ROOT / "compatibilitytools.d/amphetamine/proton"
+PROTON_BIN = STEAM_ROOT / "compatibilitytools.d/quark/proton"
 GAME_EXE = STEAM_ROOT / "steamapps/common/Balatro/Balatro.exe"
 COMPAT_DATA = STEAM_ROOT / "steamapps/compatdata/2379780"
 
-WINE_STDERR = Path("/tmp/amphetamine/wine_stderr.log")
-DAEMON_LOG = Path("/tmp/amphetamine/daemon.log")
+WINE_STDERR = Path("/tmp/quark/wine_stderr.log")
+DAEMON_LOG = Path("/tmp/quark/daemon.log")
 
 def main():
     # Kill stale
-    kill_amphetamine_processes()
+    kill_quark_processes()
 
     env = os.environ.copy()
     env["STEAM_COMPAT_DATA_PATH"] = str(COMPAT_DATA)
@@ -33,7 +33,7 @@ def main():
     env["SteamAppId"] = "2379780"
     env["SteamGameId"] = "2379780"
 
-    print(f"Launching amphetamine (timeout={TIMEOUT}s)...")
+    print(f"Launching quark (timeout={TIMEOUT}s)...")
     print(f"  Game: {GAME_EXE}")
     print(f"  Prefix: {COMPAT_DATA / 'pfx'}")
     pfx_fresh = not (COMPAT_DATA / "pfx" / "system.reg").exists()
@@ -86,7 +86,7 @@ def main():
         print(f"\n  Exited code={exit_code} after {elapsed:.1f}s")
 
     # Kill everything
-    kill_amphetamine_processes()
+    kill_quark_processes()
 
     # Analysis
     print(f"\n{'='*60}")

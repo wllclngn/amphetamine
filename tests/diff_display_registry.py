@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Diff display device registry between stock wineserver and amphetamine daemon.
+"""Diff display device registry between stock wineserver and quark daemon.
 
 Runs a minimal Wine process under BOTH stock wineserver and our daemon,
 queries the display-related registry keys that SDL2/winex11.drv reads,
@@ -22,16 +22,16 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from util import kill_amphetamine_processes, STEAM_ROOT
+from util import kill_quark_processes, STEAM_ROOT
 
 # ── Paths ─────────────────────────────────────────────────────────────
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d/amphetamine"
+COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d/quark"
 COMPAT_DATA = STEAM_ROOT / "steamapps/compatdata/2379780"
 PREFIX = COMPAT_DATA / "pfx"
 
-OUT_DIR = Path("/tmp/amphetamine/display_diff")
+OUT_DIR = Path("/tmp/quark/display_diff")
 
 # Registry paths SDL2/winex11.drv reads for display devices
 # These are the keys that must be populated for SDL_CreateWindow to work
@@ -171,7 +171,7 @@ int main(void) {
 
 def kill_wine():
     """Kill all wine processes."""
-    kill_amphetamine_processes()
+    kill_quark_processes()
 
 
 def compile_regdump():
@@ -245,10 +245,10 @@ def run_with_stock_wine(exe: Path) -> str:
     return output
 
 
-def run_with_amphetamine(exe: Path) -> str:
-    """Run regdump under our daemon (amphetamine/triskelion)."""
+def run_with_quark(exe: Path) -> str:
+    """Run regdump under our daemon (quark/triskelion)."""
     print("\n" + "="*70)
-    print("RUNNING UNDER AMPHETAMINE DAEMON (triskelion)")
+    print("RUNNING UNDER QUARK DAEMON (triskelion)")
     print("="*70)
 
     kill_wine()
@@ -301,7 +301,7 @@ def run_with_amphetamine(exe: Path) -> str:
         output = "(TIMED OUT)"
 
     # Save
-    out_file = OUT_DIR / "amphetamine.txt"
+    out_file = OUT_DIR / "quark.txt"
     out_file.write_text(output)
     print(f"Saved to {out_file}")
 
@@ -313,9 +313,9 @@ def run_with_amphetamine(exe: Path) -> str:
 
 
 def run_with_iterate(exe: Path) -> str:
-    """Run regdump through iterate.py (the actual amphetamine launch path)."""
+    """Run regdump through iterate.py (the actual quark launch path)."""
     print("\n" + "="*70)
-    print("RUNNING UNDER AMPHETAMINE VIA ITERATE.PY (actual launch path)")
+    print("RUNNING UNDER QUARK VIA ITERATE.PY (actual launch path)")
     print("="*70)
 
     kill_wine()
@@ -381,7 +381,7 @@ def run_with_iterate(exe: Path) -> str:
     return output
 
 
-def diff_outputs(stock: str, amph: str, label: str = "amphetamine"):
+def diff_outputs(stock: str, amph: str, label: str = "quark"):
     """Compare registry dumps and highlight differences."""
     print("\n" + "="*70)
     print(f"DIFF: stock wineserver vs {label}")
@@ -442,7 +442,7 @@ def diff_outputs(stock: str, amph: str, label: str = "amphetamine"):
 
 
 def main():
-    print("Display Registry Diff: Stock Wine vs Amphetamine")
+    print("Display Registry Diff: Stock Wine vs Quark")
     print("=" * 70)
 
     # Step 1: compile helper
@@ -451,8 +451,8 @@ def main():
     # Step 2: run under stock wine
     stock_output = run_with_stock_wine(exe)
 
-    # Step 3: run under amphetamine
-    amph_output = run_with_amphetamine(exe)
+    # Step 3: run under quark
+    amph_output = run_with_quark(exe)
 
     # Step 4: diff
     diff_outputs(stock_output, amph_output)
@@ -461,7 +461,7 @@ def main():
     print("\n" + "="*70)
     print("FILES SAVED:")
     print(f"  Stock:       {OUT_DIR}/stock_wine.txt")
-    print(f"  Amphetamine: {OUT_DIR}/amphetamine.txt")
+    print(f"  Quark: {OUT_DIR}/quark.txt")
     print(f"  Daemon log:  {OUT_DIR}/daemon_stderr.log")
     print("="*70)
 

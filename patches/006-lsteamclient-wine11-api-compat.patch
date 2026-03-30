@@ -1,4 +1,4 @@
-From: amphetamine <amphetamine@triskelion>
+From: quark <quark@triskelion>
 Subject: lsteamclient: port Valve Wine path APIs to upstream Wine 11.5
 
 Replace Valve-specific wine_unix_to_nt_file_name/wine_nt_to_unix_file_name

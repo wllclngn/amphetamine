@@ -1,4 +1,4 @@
-// steam_bridge.c — comprehensive steam.exe replacement for amphetamine
+// steam_bridge.c — comprehensive steam.exe replacement for quark
 //
 // Replaces Proton's steam.exe which loads games in-process (breaking
 // GetModuleFileNameW for LOVE/PhysFS). This version:

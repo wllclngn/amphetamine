@@ -1,8 +1,8 @@
 KDIR ?= /lib/modules/$(shell uname -r)/build
-MODULE_NAME := amphetamine_kmod
+MODULE_NAME := quark_kmod
 
 # kbuild cannot handle spaces in M= path. Build in /tmp if CURDIR has spaces.
-BUILD_DIR := $(shell echo '$(CURDIR)' | grep -q ' ' && echo /tmp/amphetamine-build || echo '$(CURDIR)')
+BUILD_DIR := $(shell echo '$(CURDIR)' | grep -q ' ' && echo /tmp/quark-build || echo '$(CURDIR)')
 NEED_COPY := $(shell echo '$(CURDIR)' | grep -q ' ' && echo 1 || echo 0)
 
 # Auto-detect kernel compiler from .config (CachyOS uses clang/LLVM)
@@ -44,7 +44,7 @@ load: all
 	@sudo rmmod $(MODULE_NAME) 2>/dev/null || true
 	sudo insmod $(BUILD_DIR)/$(MODULE_NAME).ko debug=1
 	@sleep 0.3
-	@dmesg | grep amphetamine | tail -3
+	@dmesg | grep quark | tail -3
 
 unload:
 	sudo rmmod $(MODULE_NAME) 2>/dev/null || true
@@ -64,7 +64,7 @@ uninstall:
 
 status:
 	@lsmod | grep $(MODULE_NAME) || echo "  Module not loaded"
-	@ls -l /dev/amphetamine 2>/dev/null || echo "  /dev/amphetamine not found"
-	@dmesg | grep amphetamine | tail -5
+	@ls -l /dev/quark 2>/dev/null || echo "  /dev/quark not found"
+	@dmesg | grep quark | tail -5
 
 .PHONY: all _sync_build clean load unload reload install uninstall status

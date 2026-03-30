@@ -1,7 +1,7 @@
-// amphetamine launcher -- full Proton replacement.
+// quark launcher -- full Proton replacement.
 //
 // Steam calls: ./proton <verb> <exe> [args...]
-// amphetamine sets up the prefix, deploys DXVK/VKD3D, bridges Steam client,
+// quark sets up the prefix, deploys DXVK/VKD3D, bridges Steam client,
 // then launches wine with WINESERVER=triskelion. One binary. Full stack.
 //
 // Optimization: after first launch, the .triskelion_deployed cache records
@@ -96,13 +96,13 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
     }
 
     // Proton's tree is optional — only needed for steam.exe sourcing now.
-    // DXVK/VKD3D are deployed by install.py into amphetamine's own lib/ dir.
+    // DXVK/VKD3D are deployed by install.py into quark's own lib/ dir.
     let proton_dir = find_proton_files();
 
-    // DXVK/VKD3D source: amphetamine's deploy dir (install.py) → Wine dir → Proton (fallback)
+    // DXVK/VKD3D source: quark's deploy dir (install.py) → Wine dir → Proton (fallback)
     let home = std::env::var("HOME").unwrap_or_default();
     let compat_tool_dir = PathBuf::from(&home)
-        .join(".local/share/Steam/compatibilitytools.d/amphetamine");
+        .join(".local/share/Steam/compatibilitytools.d/quark");
     let dxvk_src_dir = if compat_tool_dir.join("lib/wine/dxvk").exists() {
         compat_tool_dir
     } else if wine_dir.join("lib/wine/dxvk").exists() {
@@ -171,6 +171,8 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
     } else {
         deploy_vkd3d(&dxvk_src_dir, &pfx)
     };
+    // Proton drivers: sharedgpures.sys, nvcuda.dll, etc.
+    deploy_proton_drivers(proton_dir.as_deref(), &dxvk_src_dir, &pfx);
     let t_dxvk = t3.elapsed();
 
     // Phase 4: Deploy Steam client DLLs (per-component)
@@ -196,8 +198,8 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
     }
 
     // Phase 5: Build environment
-    let trace = std::env::var("AMPHETAMINE_TRACE_OPCODES").is_ok()
-        || Path::new("/tmp/amphetamine/TRACE_OPCODES").exists();
+    let trace = std::env::var("QUARK_TRACE_OPCODES").is_ok()
+        || Path::new("/tmp/quark/TRACE_OPCODES").exists();
 
     let shader_cache_enabled = self_exe.parent()
         .map(|dir| dir.join("shader_cache_enabled").exists())
@@ -263,6 +265,20 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
         // Save data protection: snapshot before launch
         let save_backup = snapshot_save_data(&pfx);
 
+        // Death pipe: when this launcher process exits (normally or crash),
+        // the write end closes automatically. Triskelion monitors the read end
+        // via epoll — POLLHUP signals "parent died, shut down gracefully."
+        // Pattern from μEmacs ext_host.c: parent holds write end, child reads.
+        let mut death_pipe = [-1i32; 2];
+        unsafe { libc::pipe2(death_pipe.as_mut_ptr(), libc::O_CLOEXEC); }
+        // Clear CLOEXEC on read end so wine64 inherits it → triskelion inherits it
+        if death_pipe[0] >= 0 {
+            unsafe {
+                let flags = libc::fcntl(death_pipe[0], libc::F_GETFD);
+                libc::fcntl(death_pipe[0], libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+            }
+        }
+
         let mut cmd = Command::new(&wine64);
         cmd.arg(game_exe);
         cmd.args(&args[1..]);
@@ -272,13 +288,17 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
         for (k, v) in &custom_env {
             cmd.env(k, v);
         }
+        // Pass death pipe read fd to triskelion via env var
+        if death_pipe[0] >= 0 {
+            cmd.env("QUARK_DEATH_FD", death_pipe[0].to_string());
+        }
 
         // Capture stderr: trace mode → opcode trace file, verbose → crash log
         let stderr_log_path = if trace {
-            if let Err(e) = std::fs::create_dir_all("/tmp/amphetamine") {
+            if let Err(e) = std::fs::create_dir_all("/tmp/quark") {
                 log_warn!("Cannot create trace dir: {e}");
             }
-            let trace_file = Path::new("/tmp/amphetamine/opcode_trace.log");
+            let trace_file = Path::new("/tmp/quark/opcode_trace.log");
             match std::fs::File::create(trace_file) {
                 Ok(f) => { cmd.stderr(std::process::Stdio::from(f)); }
                 Err(e) => log_warn!("Tracing enabled but cannot create {}: {e}", trace_file.display()),
@@ -305,10 +325,21 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
             None
         };
 
+        // Close read end in parent — we only hold the write end.
+        // When we exit, write end closes → child sees POLLHUP.
+        if death_pipe[0] >= 0 {
+            unsafe { libc::close(death_pipe[0]); }
+        }
+
         let status = cmd.status().unwrap_or_else(|e| {
             log_error!("Failed to exec wine64: {e}");
             std::process::exit(1);
         });
+
+        // Close write end explicitly (also happens on Drop, but be explicit)
+        if death_pipe[1] >= 0 {
+            unsafe { libc::close(death_pipe[1]); }
+        }
 
         // Update stderr symlink and log exit status
         if let Some(ref log_path) = stderr_log_path {
@@ -334,7 +365,7 @@ pub fn run(verb: &str, args: &[String]) -> i32 {
             // Append exit status to the stderr log
             if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(log_path) {
                 use std::io::Write;
-                let _ = writeln!(f, "\n[amphetamine] {exit_info}");
+                let _ = writeln!(f, "\n[quark] {exit_info}");
             }
             log_verbose!("stderr log: {}", log_path.display());
         }
@@ -717,6 +748,55 @@ fn deploy_vkd3d(wine_dir: &Path, pfx: &Path) -> Vec<&'static str> {
     deployed
 }
 
+/// Deploy Proton-specific drivers and DLLs that aren't part of DXVK/VKD3D.
+/// These come from Proton's lib/wine/x86_64-windows/ directory.
+fn deploy_proton_drivers(proton_dir: Option<&Path>, compat_tool_dir: &Path, pfx: &Path) {
+    // Source: Proton's PE DLLs, or compat tool's copy
+    let src = proton_dir.map(|p| p.join("lib/wine/x86_64-windows"))
+        .filter(|p| p.exists())
+        .or_else(|| {
+            let ct = compat_tool_dir.join("lib/wine/x86_64-windows");
+            ct.exists().then_some(ct)
+        });
+    let src = match src {
+        Some(s) => s,
+        None => return,
+    };
+
+    let sys32 = pfx.join("drive_c/windows/system32");
+    let drivers = sys32.join("drivers");
+    let _ = std::fs::create_dir_all(&drivers);
+
+    // Drivers: copied to system32\drivers\
+    let driver_files = ["sharedgpures.sys"];
+    for name in driver_files {
+        let s = src.join(name);
+        let d = drivers.join(name);
+        if s.exists() && !file_matches(&s, &d) {
+            let _ = std::fs::remove_file(&d);
+            if let Err(e) = std::fs::copy(&s, &d) {
+                log_warn!("proton-driver: failed to copy {name}: {e}");
+            }
+        }
+    }
+
+    // DLLs: copied to system32\ (GPU vendor stubs, audio, anti-cheat bridges, etc.)
+    let dll_files = [
+        "nvcuda.dll", "amd_ags_x64.dll", "amdxc64.dll", "atiadlxx.dll",
+        "dxcore.dll", "audioses.dll", "belauncher.exe",
+    ];
+    for name in dll_files {
+        let s = src.join(name);
+        let d = sys32.join(name);
+        if s.exists() && !file_matches(&s, &d) {
+            let _ = std::fs::remove_file(&d);
+            if let Err(e) = std::fs::copy(&s, &d) {
+                log_warn!("proton-dll: failed to copy {name}: {e}");
+            }
+        }
+    }
+}
+
 fn deploy_dlls(
     src_dir: &Path, dst_dir: &Path, dlls: &[&'static str], label: &str,
 ) -> Vec<&'static str> {
@@ -819,10 +899,10 @@ fn deploy_steam_client(steam_dir: &Path, pfx: &Path) {
 }
 
 /// Ensure steam.exe exists in the prefix's system32 and syswow64.
-/// Sources: cached copy (~/.local/share/amphetamine/steam.exe) → Proton (fallback).
+/// Sources: cached copy (~/.local/share/quark/steam.exe) → Proton (fallback).
 fn deploy_steam_exe(proton_dir: Option<&Path>, pfx: &Path) {
     let home = std::env::var("HOME").unwrap_or_default();
-    let cached = PathBuf::from(&home).join(".local/share/amphetamine/steam.exe");
+    let cached = PathBuf::from(&home).join(".local/share/quark/steam.exe");
 
     let sys32 = pfx.join("drive_c/windows/system32");
     let syswow64 = pfx.join("drive_c/windows/syswow64");
@@ -882,12 +962,12 @@ fn build_env_vars(
     let wine_vkd3d = wine_dir.join("lib/vkd3d");
     let steam_linux64 = steam_dir.join("linux64");
 
-    // WINEDLLPATH: amphetamine patched libs → vkd3d → wine DLLs → Proton DLLs
+    // WINEDLLPATH: quark patched libs → vkd3d → wine DLLs → Proton DLLs
     let mut dll_parts: Vec<String> = Vec::new();
     // Our custom-compiled ntdll.so (with triskelion.c + ntsync) takes priority
     // Wine searches {WINEDLLPATH}/wine/x86_64-unix/ for unix modules
-    let amphetamine_wine_lib = self_exe.parent().map(|d| d.join("lib"));
-    if let Some(ref lib) = amphetamine_wine_lib {
+    let quark_wine_lib = self_exe.parent().map(|d| d.join("lib"));
+    if let Some(ref lib) = quark_wine_lib {
         if lib.exists() {
             dll_parts.push(lib.display().to_string());
         }
@@ -927,7 +1007,7 @@ fn build_env_vars(
     ld_parts.push(wine_lib.display().to_string());
     // Unix .so modules (crypt32.so, ws2_32.so, etc.) have NEEDED: ntdll.so.
     // The dynamic linker must find ntdll.so by name — add the x86_64-unix dirs.
-    if let Some(ref lib) = amphetamine_wine_lib {
+    if let Some(ref lib) = quark_wine_lib {
         let unix_dir = lib.join("wine/x86_64-unix");
         if unix_dir.exists() {
             ld_parts.push(unix_dir.display().to_string());
@@ -1110,86 +1190,86 @@ fn write_launch_prom(
 
     // ---- System ----
     w.separator();
-    w.header("amphetamine_system_info", "System identification", "gauge");
-    w.info("amphetamine_system_info", "kernel", &kernel_version());
-    w.info("amphetamine_system_info", "distro", &distro_name());
-    w.info("amphetamine_system_info", "gpu_vendor", gpu_vendor());
+    w.header("quark_system_info", "System identification", "gauge");
+    w.info("quark_system_info", "kernel", &kernel_version());
+    w.info("quark_system_info", "distro", &distro_name());
+    w.info("quark_system_info", "gpu_vendor", gpu_vendor());
 
-    w.header("amphetamine_system_cpu_count", "Online CPU count", "gauge");
-    w.gauge("amphetamine_system_cpu_count", cpu_count());
+    w.header("quark_system_cpu_count", "Online CPU count", "gauge");
+    w.gauge("quark_system_cpu_count", cpu_count());
 
-    w.header("amphetamine_system_ram_bytes", "Total system RAM", "gauge");
-    w.gauge("amphetamine_system_ram_bytes", total_ram_bytes());
+    w.header("quark_system_ram_bytes", "Total system RAM", "gauge");
+    w.gauge("quark_system_ram_bytes", total_ram_bytes());
 
     // ---- Steam ----
     w.separator();
-    w.header("amphetamine_steam_compat_data_path", "Steam compat data path", "gauge");
-    w.info("amphetamine_steam_compat_data_path", "path", compat_data);
+    w.header("quark_steam_compat_data_path", "Steam compat data path", "gauge");
+    w.info("quark_steam_compat_data_path", "path", compat_data);
 
     let app_id = std::path::Path::new(compat_data)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
-    w.header("amphetamine_steam_app_id", "Steam application ID", "gauge");
-    w.info("amphetamine_steam_app_id", "app_id", app_id);
+    w.header("quark_steam_app_id", "Steam application ID", "gauge");
+    w.info("quark_steam_app_id", "app_id", app_id);
 
     if let Some(exe) = game_exe {
-        w.header("amphetamine_game_executable", "Game executable path", "gauge");
-        w.info("amphetamine_game_executable", "path", exe);
+        w.header("quark_game_executable", "Game executable path", "gauge");
+        w.info("quark_game_executable", "path", exe);
     }
 
     // ---- Paths ----
     w.separator();
-    w.header("amphetamine_wine_dir", "Wine installation directory", "gauge");
-    w.info("amphetamine_wine_dir", "path", &wine_dir.display().to_string());
+    w.header("quark_wine_dir", "Wine installation directory", "gauge");
+    w.info("quark_wine_dir", "path", &wine_dir.display().to_string());
 
-    w.header("amphetamine_steam_dir", "Steam installation directory", "gauge");
-    w.info("amphetamine_steam_dir", "path", &steam_dir.display().to_string());
+    w.header("quark_steam_dir", "Steam installation directory", "gauge");
+    w.info("quark_steam_dir", "path", &steam_dir.display().to_string());
 
-    w.header("amphetamine_wineserver", "Wineserver binary path", "gauge");
-    w.info("amphetamine_wineserver", "path", &self_exe.display().to_string());
+    w.header("quark_wineserver", "Wineserver binary path", "gauge");
+    w.info("quark_wineserver", "path", &self_exe.display().to_string());
 
-    w.header("amphetamine_wineprefix", "Wine prefix path", "gauge");
-    w.info("amphetamine_wineprefix", "path", &pfx.display().to_string());
+    w.header("quark_wineprefix", "Wine prefix path", "gauge");
+    w.info("quark_wineprefix", "path", &pfx.display().to_string());
 
     // ---- Cache ----
     w.separator();
-    w.header("amphetamine_cache_hit", "Component cache hit (1=hit, 0=miss)", "gauge");
-    w.gauge_labeled("amphetamine_cache_hit", "component", "wine", wine_valid as u64);
-    w.gauge_labeled("amphetamine_cache_hit", "component", "dxvk", dxvk_valid as u64);
-    w.gauge_labeled("amphetamine_cache_hit", "component", "vkd3d", vkd3d_valid as u64);
-    w.gauge_labeled("amphetamine_cache_hit", "component", "steam", steam_valid as u64);
+    w.header("quark_cache_hit", "Component cache hit (1=hit, 0=miss)", "gauge");
+    w.gauge_labeled("quark_cache_hit", "component", "wine", wine_valid as u64);
+    w.gauge_labeled("quark_cache_hit", "component", "dxvk", dxvk_valid as u64);
+    w.gauge_labeled("quark_cache_hit", "component", "vkd3d", vkd3d_valid as u64);
+    w.gauge_labeled("quark_cache_hit", "component", "steam", steam_valid as u64);
 
     // ---- Timing ----
     w.separator();
-    w.header("amphetamine_setup_duration_ms", "Setup phase duration in milliseconds", "gauge");
-    w.gauge_labeled("amphetamine_setup_duration_ms", "phase", "discover", t_discover.as_millis() as u64);
-    w.gauge_labeled("amphetamine_setup_duration_ms", "phase", "prefix", t_prefix.as_millis() as u64);
-    w.gauge_labeled("amphetamine_setup_duration_ms", "phase", "dxvk_vkd3d", t_dxvk.as_millis() as u64);
-    w.gauge_labeled("amphetamine_setup_duration_ms", "phase", "steam_client", t_steam.as_millis() as u64);
-    w.gauge_labeled("amphetamine_setup_duration_ms", "phase", "total", t_total.as_millis() as u64);
+    w.header("quark_setup_duration_ms", "Setup phase duration in milliseconds", "gauge");
+    w.gauge_labeled("quark_setup_duration_ms", "phase", "discover", t_discover.as_millis() as u64);
+    w.gauge_labeled("quark_setup_duration_ms", "phase", "prefix", t_prefix.as_millis() as u64);
+    w.gauge_labeled("quark_setup_duration_ms", "phase", "dxvk_vkd3d", t_dxvk.as_millis() as u64);
+    w.gauge_labeled("quark_setup_duration_ms", "phase", "steam_client", t_steam.as_millis() as u64);
+    w.gauge_labeled("quark_setup_duration_ms", "phase", "total", t_total.as_millis() as u64);
 
     // ---- Shader cache ----
     w.separator();
-    w.header("amphetamine_shader_cache_enabled", "Per-game shader cache enabled", "gauge");
-    w.gauge("amphetamine_shader_cache_enabled", shader_cache_enabled as u64);
+    w.header("quark_shader_cache_enabled", "Per-game shader cache enabled", "gauge");
+    w.gauge("quark_shader_cache_enabled", shader_cache_enabled as u64);
 
-    w.header("amphetamine_shader_cache_gpu_vendor", "GPU vendor for shader cache", "gauge");
-    w.info("amphetamine_shader_cache_gpu_vendor", "vendor", gpu_vendor());
+    w.header("quark_shader_cache_gpu_vendor", "GPU vendor for shader cache", "gauge");
+    w.info("quark_shader_cache_gpu_vendor", "vendor", gpu_vendor());
 
     // ---- Save data protection ----
     w.separator();
     let (save_files, save_bytes) = count_save_data_stats(pfx);
-    w.header("amphetamine_save_backup_files", "Number of save data files found pre-launch", "gauge");
-    w.gauge("amphetamine_save_backup_files", save_files as u64);
-    w.header("amphetamine_save_backup_bytes", "Total bytes of save data found pre-launch", "gauge");
-    w.gauge("amphetamine_save_backup_bytes", save_bytes);
+    w.header("quark_save_backup_files", "Number of save data files found pre-launch", "gauge");
+    w.gauge("quark_save_backup_files", save_files as u64);
+    w.header("quark_save_backup_bytes", "Total bytes of save data found pre-launch", "gauge");
+    w.gauge("quark_save_backup_bytes", save_bytes);
 
     // ---- Environment variables ----
     w.separator();
-    w.header("amphetamine_env_var", "Environment variable set for game", "gauge");
+    w.header("quark_env_var", "Environment variable set for game", "gauge");
     for (k, v) in env_vars {
-        w.gauge_labeled2("amphetamine_env_var", "name", k, "value", v, 1);
+        w.gauge_labeled2("quark_env_var", "name", k, "value", v, 1);
     }
 
     // Write file
@@ -1222,7 +1302,7 @@ fn wine_binary(dir: &Path) -> PathBuf {
 
 /// Find Wine binaries. Priority:
 /// 1. TRISKELION_WINE_DIR env var (explicit override)
-/// 2. amphetamine's own staged binaries — system Wine copied here by
+/// 2. quark's own staged binaries — system Wine copied here by
 ///    install.py so argv[0]/../lib/ resolves to our custom ntdll.so
 ///    (built from matching upstream Wine version)
 /// 3. Proton Experimental (prefix template source)
@@ -1236,7 +1316,7 @@ fn find_wine() -> PathBuf {
         }
     }
 
-    // amphetamine's staged wine binaries (system Wine, ABI-matched to our ntdll.so)
+    // quark's staged wine binaries (system Wine, ABI-matched to our ntdll.so)
     if let Ok(self_exe) = std::env::current_exe() {
         if let Some(self_dir) = self_exe.parent() {
             if has_wine_bin(self_dir)

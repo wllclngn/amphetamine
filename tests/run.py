@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integrated test runner for amphetamine/triskelion.
+"""Integrated test runner for quark/triskelion.
 
 Tier 1: Pure unit tests (no Wine, no processes) — always safe
 Tier 2: Triskelion integration (launches Wine) — scoped kill only
@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from util import kill_amphetamine_processes, REFERENCE_DIR, _USER_HOME
+from util import kill_quark_processes, REFERENCE_DIR, _USER_HOME
 
 TESTS_DIR = Path(__file__).parent
 REPO_ROOT = TESTS_DIR.parent
@@ -46,7 +46,7 @@ TIER_2 = {
                       "--skip-build", "--timeout", "20",
                       "--appid", "2379780"]),
     ],
-    "prereqs": [str(_USER_HOME / ".local/share/Steam/compatibilitytools.d/amphetamine/proton")],
+    "prereqs": [str(_USER_HOME / ".local/share/Steam/compatibilitytools.d/quark/proton")],
 }
 
 TIER_3 = {
@@ -87,7 +87,7 @@ def run_tier(tier, continue_on_error=False):
 
     for test_name, cmd in tier["tests"]:
         # Safety barrier between tests
-        kill_amphetamine_processes()
+        kill_quark_processes()
 
         print(f"\n  [{test_name}] ", end="", flush=True)
         t0 = time.time()
@@ -134,7 +134,7 @@ def main():
             specific_tier = int(sys.argv[idx + 1])
 
     print("=" * 60)
-    print("  amphetamine test runner")
+    print("  quark test runner")
     print("=" * 60)
 
     total_passed, total_failed, total_skipped = 0, 0, 0
@@ -162,7 +162,7 @@ def main():
         total_skipped += s
 
     # Final cleanup
-    kill_amphetamine_processes()
+    kill_quark_processes()
 
     # Summary
     print(f"\n{'=' * 60}")

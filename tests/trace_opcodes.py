@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Automated opcode trace: launches a game through REAL Proton (not amphetamine),
+Automated opcode trace: launches a game through REAL Proton (not quark),
 captures the full WINEDEBUG=+server protocol trace, parses it, and reports
 exactly which opcodes triskelion needs to implement.
 
@@ -31,7 +31,7 @@ from collections import Counter, OrderedDict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from util import kill_amphetamine_processes, STEAM_ROOT, AMP_DIR_STR
+from util import kill_quark_processes, STEAM_ROOT, AMP_DIR_STR
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
@@ -88,7 +88,7 @@ def find_game_exe(app_id):
 
 
 def find_proton():
-    """Find a real Proton installation (not amphetamine)."""
+    """Find a real Proton installation (not quark)."""
     candidates = [
         STEAMAPPS / "common" / "Proton - Experimental",
         STEAMAPPS / "common" / "Proton 10.0",
@@ -98,7 +98,7 @@ def find_proton():
     # Also check compatibilitytools.d for GE-Proton
     if COMPAT_TOOLS.exists():
         for d in sorted(COMPAT_TOOLS.iterdir(), reverse=True):
-            if d.is_dir() and "proton" in d.name.lower() and "amphetamine" not in d.name.lower():
+            if d.is_dir() and "proton" in d.name.lower() and "quark" not in d.name.lower():
                 candidates.insert(0, d)
 
     for p in candidates:
@@ -124,11 +124,11 @@ def find_implemented_handlers():
 
 def kill_wine_processes():
     """Kill all wine/wineserver processes. Returns after they're dead."""
-    kill_amphetamine_processes()
+    kill_quark_processes()
 
 
 def find_wine_pids():
-    """Find wine PIDs scoped to amphetamine's compat tool directory.
+    """Find wine PIDs scoped to quark's compat tool directory.
 
     Read-only monitoring -- never used for kill decisions.
     """

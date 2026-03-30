@@ -1,4 +1,4 @@
-// noassert.so — LD_PRELOAD shim for Wine under amphetamine.
+// noassert.so — LD_PRELOAD shim for Wine under quark.
 //
 // 1. Suppresses assertion failures in Wine's ntdll unix layer
 //    (add_fd_to_cache collision, user_check_not_lock race).

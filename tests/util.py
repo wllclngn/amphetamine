@@ -1,7 +1,7 @@
-"""Shared test infrastructure for amphetamine/triskelion.
+"""Shared test infrastructure for quark/triskelion.
 
 Every test imports from here instead of rolling its own kill/launch logic.
-The kill functions are scoped to amphetamine's compat tool directory — they
+The kill functions are scoped to quark's compat tool directory — they
 NEVER match bare 'wine' or 'wineserver', which would hit Proton's running
 processes and corrupt prefixes.
 """
@@ -23,7 +23,7 @@ REFERENCE_DIR = TESTS_DIR / "reference"
 
 _USER_HOME = Path(f"/home/{os.environ.get('SUDO_USER', os.environ.get('USER', 'mod'))}")
 STEAM_ROOT = _USER_HOME / ".local/share/Steam"
-AMP_DIR = STEAM_ROOT / "compatibilitytools.d/amphetamine"
+AMP_DIR = STEAM_ROOT / "compatibilitytools.d/quark"
 AMP_DIR_STR = str(AMP_DIR)
 
 PROTON_DIR = STEAM_ROOT / "steamapps/common/Proton 10.0"
@@ -32,12 +32,12 @@ PROTON_BIN = PROTON_DIR / "proton"
 
 # ── Process Management ──
 
-def kill_amphetamine_processes(graceful_timeout=0.3):
-    """Kill ONLY processes from amphetamine's compat tool directory.
+def kill_quark_processes(graceful_timeout=0.3):
+    """Kill ONLY processes from quark's compat tool directory.
 
     1. SIGTERM triskelion (lets Drop handlers fire, writes stats)
     2. Wait graceful_timeout for clean shutdown
-    3. SIGKILL processes matching amphetamine directory path
+    3. SIGKILL processes matching quark directory path
     4. SIGKILL stragglers found via pgrep
 
     NEVER matches bare 'wine' or 'wineserver' — those patterns hit Proton's
@@ -108,7 +108,7 @@ def launch_with_process_group(cmd, env, cwd="/tmp", **kwargs):
 # ── Environment ──
 
 def make_game_env(appid="2379780", winedebug="-all", extra=None):
-    """Build the standard env dict for launching a game through amphetamine.
+    """Build the standard env dict for launching a game through quark.
 
     Includes display vars (DISPLAY, WAYLAND_DISPLAY, XDG_RUNTIME_DIR),
     Steam vars (STEAM_COMPAT_DATA_PATH, SteamAppId), and Wine config.
@@ -170,7 +170,7 @@ def make_temp_prefix():
     Returns (prefix_path, cleanup_fn). Call cleanup_fn() when done.
     For stock captures and tests that must not touch the real Steam prefix.
     """
-    tmpdir = tempfile.mkdtemp(prefix="amphetamine_test_")
+    tmpdir = tempfile.mkdtemp(prefix="quark_test_")
     prefix = Path(tmpdir) / "pfx"
     prefix.mkdir(parents=True, exist_ok=True)
 

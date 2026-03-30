@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-amphetamine package validation and smoke tests.
+quark package validation and smoke tests.
 
 Verifies the packaged Steam compatibility tool is structurally correct
 and can initialize a Wine prefix + launch a game.
@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from util import _USER_HOME
 
-TOOL_DIR = _USER_HOME / ".steam" / "root" / "compatibilitytools.d" / "amphetamine"
+TOOL_DIR = _USER_HOME / ".steam" / "root" / "compatibilitytools.d" / "quark"
 FILES_DIR = TOOL_DIR / "files"
 BIN_DIR = FILES_DIR / "bin"
 LIB_WIN = FILES_DIR / "lib" / "wine" / "x86_64-windows"
@@ -158,7 +158,7 @@ def test_vdf_contents(r: TestResult):
     compat_vdf = TOOL_DIR / "compatibilitytool.vdf"
     if compat_vdf.exists():
         text = compat_vdf.read_text()
-        if "amphetamine" in text and "display_name" in text:
+        if "quark" in text and "display_name" in text:
             r.ok("compatibilitytool.vdf content")
         else:
             r.fail("compatibilitytool.vdf content", "missing expected fields")
@@ -187,7 +187,7 @@ def test_prefix_init(r: TestResult):
         r.fail("prefix init", "wine64 not found")
         return
 
-    with tempfile.TemporaryDirectory(prefix="amphetamine_test_") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="quark_test_") as tmpdir:
         pfx = Path(tmpdir) / "pfx"
         env = dict(os.environ)
         env["WINEPREFIX"] = str(pfx)
@@ -216,7 +216,7 @@ def test_prefix_init(r: TestResult):
 # SMOKE TEST
 
 def test_smoke_launch(r: TestResult, app_id: str):
-    """Launch a Steam game through amphetamine and verify it starts."""
+    """Launch a Steam game through quark and verify it starts."""
     compat_data = _USER_HOME / ".steam" / "root" / "steamapps" / "compatdata" / app_id
     if not compat_data.exists():
         r.fail(f"smoke launch {app_id}", f"no compatdata for app {app_id}")
@@ -246,11 +246,11 @@ def test_smoke_launch(r: TestResult, app_id: str):
 
     r.ok(f"smoke: game found at {game_path}")
     print()
-    print(f"  To launch Guild Wars 2 through Steam with amphetamine:")
+    print(f"  To launch Guild Wars 2 through Steam with quark:")
     print(f"    1. Restart Steam (so it picks up the new compatibility tool)")
     print(f"    2. Right-click Guild Wars 2 > Properties > Compatibility")
     print(f"    3. Check 'Force the use of a specific Steam Play compatibility tool'")
-    print(f"    4. Select 'amphetamine (stripped Wine)'")
+    print(f"    4. Select 'quark (stripped Wine)'")
     print(f"    5. Launch: steam steam://rungameid/{app_id}")
     print()
 
@@ -266,7 +266,7 @@ def run_tests(smoke_app_id: str | None = None) -> int:
         return 1
 
     print()
-    print("  amphetamine package tests")
+    print("  quark package tests")
     print()
 
     test_structure(r)
@@ -284,7 +284,7 @@ def run_tests(smoke_app_id: str | None = None) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="amphetamine package tests")
+    parser = argparse.ArgumentParser(description="quark package tests")
     parser.add_argument("--smoke", metavar="APPID",
                         help="Smoke-test a Steam game (e.g. 1284210 for GW2)")
     args = parser.parse_args()

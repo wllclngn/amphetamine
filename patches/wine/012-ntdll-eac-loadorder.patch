@@ -1,4 +1,4 @@
-From: amphetamine <amphetamine@localhost>
+From: quark <quark@localhost>
 Subject: [PATCH] ntdll: Special-case EasyAntiCheat DLL load order
 
 When loading easyanticheat_x64.dll / easyanticheat_x86.dll /
@@ -6,28 +6,26 @@ easyanticheat.dll, check if the corresponding .so bridge exists.
 If so, load as builtin (uses the Wine bridge). If not, or if this
 is the EAC launcher process, load as native.
 
-This enables the Proton EAC Runtime bridge DLL+SO pair to intercept
-the game's EAC DLL loads and redirect them through Wine's unix call
-mechanism to the native Linux EAC client.
-
 Ported from wine-valve (Proton).
 
+diff --git a/dlls/ntdll/unix/loadorder.c b/dlls/ntdll/unix/loadorder.c
+index 11c3ab9..d2f3c77 100644
 --- a/dlls/ntdll/unix/loadorder.c
 +++ b/dlls/ntdll/unix/loadorder.c
-@@ -58,6 +58,7 @@
+@@ -58,6 +58,7 @@ static HANDLE std_key;
  static HANDLE app_key;
  static BOOL init_done;
  static BOOL main_exe_loaded;
 +static BOOL eac_launcher_process;
-
-
+ 
+ 
  /***************************************************************************
-@@ -362,9 +363,33 @@
+@@ -362,10 +363,23 @@ static enum loadorder get_load_order_value( HANDLE std_key, HANDLE app_key, WCHA
  void set_load_order_app_name( const WCHAR *app_name )
  {
      const WCHAR *p;
 +    static const WCHAR eac_envW[] = {'P','R','O','T','O','N','_','E','A','C','_','L','A','U','N','C','H','E','R','_','P','R','O','C','E','S','S',0};
-
+ 
      if ((p = wcsrchr( app_name, '\\' ))) app_name = p + 1;
      app_key = open_app_key( app_name );
      main_exe_loaded = TRUE;
@@ -44,9 +42,9 @@ Ported from wine-valve (Proton).
 +        p += wcslen(p) + 1;
 +    }
  }
-
-
-@@ -378,10 +403,63 @@
+ 
+ 
+@@ -378,10 +392,14 @@ void set_load_order_app_name( const WCHAR *app_name )
  enum loadorder get_load_order( const UNICODE_STRING *nt_name )
  {
      static const WCHAR prefixW[] = {'\\','?','?','\\'};
@@ -59,13 +57,13 @@ Ported from wine-valve (Proton).
      unsigned int i, len = nt_name->Length / sizeof(WCHAR);
 -    WCHAR *module, *basename;
 +    WCHAR *module, *basename, *eac_basename;
-
+ 
      if (!init_done) init_load_order();
-
-@@ -392,6 +470,48 @@
+ 
+@@ -391,6 +409,53 @@ enum loadorder get_load_order( const UNICODE_STRING *nt_name )
          len -= 4;
      }
-
+ 
 +    /* EAC bridge: load as builtin if the .so bridge exists, native otherwise */
 +    eac_basename = get_basename( (WCHAR *)path );
 +    if (!wcsicmp(eac_basename, easyanticheat_x86W) || !wcsicmp(eac_basename, easyanticheat_x64W) || !wcsicmp(eac_basename, easyanticheatW))
@@ -115,3 +113,4 @@ Ported from wine-valve (Proton).
 +
      /* Strip path information if the module resides in the system directory
       */
+     if (len > wcslen(system_dir) - 4 && !wcsnicmp( system_dir + 4, path, wcslen(system_dir) - 4 ))

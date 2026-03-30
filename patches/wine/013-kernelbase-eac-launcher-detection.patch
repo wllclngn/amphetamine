@@ -1,32 +1,26 @@
-From: amphetamine <amphetamine@localhost>
+From: quark <quark@localhost>
 Subject: [PATCH] kernelbase: Set PROTON_EAC_LAUNCHER_PROCESS for EAC launcher exes
 
 When CreateProcessInternalW spawns a process whose name matches known
 EasyAntiCheat launcher patterns (start_protected_game.exe), set
-PROTON_EAC_LAUNCHER_PROCESS=1 in the child's environment. This tells
-ntdll's loadorder to use the native EAC DLL (the launcher needs native
-to download the Linux module) instead of the builtin bridge.
+PROTON_EAC_LAUNCHER_PROCESS=1 in the child's environment.
 
-Simplified from wine-valve (Proton) — uses filename matching instead
-of PE version resource product name query.
+Simplified from wine-valve (Proton).
 
---- a/dlls/kernelbase/process.c
-+++ b/dlls/kernelbase/process.c
-@@ -564,6 +564,30 @@
-     if (!(params = create_process_params( app_name, tidy_cmdline, cur_dir, env, flags, startup_info )))
-     {
-         status = STATUS_NO_MEMORY;
+--- a/b/dlls/kernelbase/process.c	2026-03-29 14:05:42.526007339 -0500
++++ b/dlls/kernelbase/process.c	2026-03-29 14:05:42.534022173 -0500
+@@ -567,6 +567,31 @@
          goto done;
      }
-
+ 
 +    /* EAC launcher detection: set PROTON_EAC_LAUNCHER_PROCESS for known
 +     * EasyAntiCheat launcher executables so ntdll loads native EAC DLLs
 +     * (the launcher downloads the Linux anti-cheat module). The actual
 +     * game process will NOT have this set, so it uses the builtin bridge. */
 +    {
 +        static const WCHAR protectedW[] = L"start_protected_game.exe";
-+        const WCHAR *exe_base = app_name ? wcsrchr( app_name, '\\' ) : NULL;
-+        if (!exe_base) exe_base = app_name ? wcsrchr( app_name, '/' ) : NULL;
++        const WCHAR *exe_base = app_name ? wcsrchr( app_name, L'\' ) : NULL;
++        if (!exe_base) exe_base = app_name ? wcsrchr( app_name, L'/' ) : NULL;
 +        exe_base = exe_base ? exe_base + 1 : app_name;
 +        if (exe_base && !wcsicmp( exe_base, protectedW ))
 +        {
@@ -46,3 +40,4 @@ of PE version resource product name query.
 +
      if (flags & (DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS))
      {
+         if ((status = DbgUiConnectToDbg())) goto done;

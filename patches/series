@@ -1,4 +1,4 @@
-# amphetamine Wine patches — applied to upstream Wine 11.5 (wine-src)
+# quark Wine patches — applied to upstream Wine 11.5 (wine-src)
 # Format: one patch per line, relative to patches/ directory
 # Applied via: git apply in wine source root
 

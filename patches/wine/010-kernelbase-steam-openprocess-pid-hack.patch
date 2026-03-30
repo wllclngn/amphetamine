@@ -1,4 +1,4 @@
-From: amphetamine <amphetamine@localhost>
+From: quark <quark@localhost>
 Subject: [PATCH] kernelbase: Substitute calling process PID for magic Steam PID 0xfffe
 
 Steam's steam.exe helper writes PID 0xfffe to the registry at

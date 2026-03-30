@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Side-by-side display initialization trace: amphetamine vs stock wineserver.
+"""Side-by-side display initialization trace: quark vs stock wineserver.
 
 Runs Balatro twice — once with our daemon, once with stock wineserver — and
 captures the exact display device registration sequence. Diffs the two to
@@ -8,7 +8,7 @@ identify what our daemon does differently.
 Usage:
     python3 tests/trace_display_init.py
     python3 tests/trace_display_init.py --timeout 20
-    python3 tests/trace_display_init.py --amphetamine-only
+    python3 tests/trace_display_init.py --quark-only
     python3 tests/trace_display_init.py --stock-only
 """
 
@@ -21,18 +21,18 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from util import kill_amphetamine_processes, STEAM_ROOT
+from util import kill_quark_processes, STEAM_ROOT
 
 # ── Paths ─────────────────────────────────────────────────────────────
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STEAMAPPS = STEAM_ROOT / "steamapps"
-COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d/amphetamine"
+COMPAT_DIR = STEAM_ROOT / "compatibilitytools.d/quark"
 PROTON_BIN = COMPAT_DIR / "proton"
 GAME_EXE = STEAMAPPS / "common/Balatro/Balatro.exe"
 COMPAT_DATA = STEAMAPPS / "compatdata/2379780"
 
-TRACE_DIR = Path("/tmp/amphetamine/display_trace")
+TRACE_DIR = Path("/tmp/quark/display_trace")
 
 # Wine debug channels that matter for display init
 WINEDEBUG = ",".join([
@@ -89,7 +89,7 @@ REGISTRY_KEYWORDS = [
 
 def cleanup():
     """Kill all Wine processes."""
-    kill_amphetamine_processes()
+    kill_quark_processes()
 
 
 def run_trace(label, proton_bin, timeout, trace_dir):
@@ -102,7 +102,7 @@ def run_trace(label, proton_bin, timeout, trace_dir):
     trace_dir.mkdir(parents=True, exist_ok=True)
 
     stderr_log = trace_dir / f"{label}_wine_stderr.log"
-    daemon_log = Path("/tmp/amphetamine/daemon.log")
+    daemon_log = Path("/tmp/quark/daemon.log")
 
     # Clean logs
     for p in [stderr_log, daemon_log]:
@@ -110,7 +110,7 @@ def run_trace(label, proton_bin, timeout, trace_dir):
             p.unlink()
         except OSError:
             pass
-    Path("/tmp/amphetamine").mkdir(exist_ok=True)
+    Path("/tmp/quark").mkdir(exist_ok=True)
 
     env = os.environ.copy()
     env["STEAM_COMPAT_DATA_PATH"] = str(COMPAT_DATA)
@@ -221,9 +221,9 @@ def print_section(title, lines, max_lines=50):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Trace display init: amphetamine vs stock")
+    parser = argparse.ArgumentParser(description="Trace display init: quark vs stock")
     parser.add_argument("--timeout", type=int, default=15)
-    parser.add_argument("--amphetamine-only", action="store_true")
+    parser.add_argument("--quark-only", action="store_true")
     parser.add_argument("--stock-only", action="store_true")
     args = parser.parse_args()
 
@@ -234,18 +234,18 @@ def main():
     trace_dir = TRACE_DIR
     trace_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Amphetamine run ──────────────────────────────────────────────
+    # ── Quark run ──────────────────────────────────────────────
     amp_stderr = None
-    amp_daemon = Path("/tmp/amphetamine/daemon.log")
+    amp_daemon = Path("/tmp/quark/daemon.log")
     if not args.stock_only:
         if not PROTON_BIN.exists():
-            print(f"WARN: amphetamine not installed at {PROTON_BIN}")
+            print(f"WARN: quark not installed at {PROTON_BIN}")
         else:
-            amp_stderr = run_trace("AMPHETAMINE", PROTON_BIN, args.timeout, trace_dir)
+            amp_stderr = run_trace("QUARK", PROTON_BIN, args.timeout, trace_dir)
 
     # ── Stock wineserver run ─────────────────────────────────────────
     stock_stderr = None
-    if not args.amphetamine_only:
+    if not args.quark_only:
         # Find stock Proton
         proton_dirs = [
             STEAMAPPS / "common/Proton 10.0",
@@ -280,10 +280,10 @@ def main():
             "RegisterTouch", "create_whole", "drawable_create",
             "err:", "warn:",
         ])
-        print_section("AMPHETAMINE — Display Init Trace", amp_display)
+        print_section("QUARK — Display Init Trace", amp_display)
 
         amp_registry = extract_registry_ops(amp_daemon)
-        print_section("AMPHETAMINE — Registry Ops (display-related)", amp_registry)
+        print_section("QUARK — Registry Ops (display-related)", amp_registry)
 
     if stock_stderr:
         stock_display = extract_display_lines(stock_stderr, [
@@ -344,7 +344,7 @@ def main():
         stock_window = any("RegisterTouch" in l or "create_whole" in l or "drawable_create" in l
                            for l in extract_display_lines(stock_stderr, ["RegisterTouch", "create_whole", "drawable_create"]))
 
-        print(f"\n    Window created (amphetamine): {'YES' if amp_window else 'NO'}")
+        print(f"\n    Window created (quark): {'YES' if amp_window else 'NO'}")
         print(f"    Window created (stock):       {'YES' if stock_window else 'NO'}")
 
     # ── Summary ──────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ def main():
     print(f"  FILES")
     print(f"{'='*60}")
     if amp_stderr:
-        print(f"  Amphetamine stderr: {amp_stderr}")
+        print(f"  Quark stderr: {amp_stderr}")
     if stock_stderr:
         print(f"  Stock stderr:       {stock_stderr}")
     print(f"  Daemon log:         {amp_daemon}")

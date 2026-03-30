@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and deploy amphetamine: triskelion binary, DXVK/VKD3D, optional ntsync ntdll, optional kernel module."""
+"""Build and deploy quark: triskelion binary, DXVK/VKD3D, optional ntsync ntdll, optional kernel module."""
 
 import filecmp
 import hashlib
@@ -20,10 +20,10 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 RUST_DIR = SCRIPT_DIR / "rust"
 PATCHES_DIR = SCRIPT_DIR / "patches" / "wine"
 
-DATA_DIR = Path.home() / ".local" / "share" / "amphetamine"
-WINE_SRC_DIR = Path("/tmp/amphetamine-wine-build/wine-src")
-WINE_OBJ_DIR = Path("/tmp/amphetamine-wine-build/wine-obj")
-STEAM_COMPAT_DIR = Path.home() / ".local" / "share" / "Steam" / "compatibilitytools.d" / "amphetamine"
+DATA_DIR = Path.home() / ".local" / "share" / "quark"
+WINE_SRC_DIR = Path("/tmp/quark-wine-build/wine-src")
+WINE_OBJ_DIR = Path("/tmp/quark-wine-build/wine-obj")
+STEAM_COMPAT_DIR = Path.home() / ".local" / "share" / "Steam" / "compatibilitytools.d" / "quark"
 WINE_CLONE_URL = "https://gitlab.winehq.org/wine/wine.git"
 WINE_TAG = "wine-11.5"
 PROTON_STEAM_DIR = Path.home() / ".local" / "share" / "Steam" / "steamapps" / "common" / "Proton 10.0" / "files"
@@ -99,11 +99,11 @@ PEEK_MSG_GUARD = """\
 
 
 ENV_CONFIG_TEMPLATE = """\
-# amphetamine custom environment variables
+# quark custom environment variables
 #
 # Format: KEY=VALUE (one per line)
 # Lines starting with # are comments. Blank lines are ignored.
-# Variables set here override amphetamine's built-in defaults.
+# Variables set here override quark's built-in defaults.
 # Edit this file any time — changes apply on next game launch.
 #
 # --- Logging ---
@@ -197,36 +197,38 @@ def get_latest_wine_tag():
 
 
 def build_triskelion():
-    log("INFO", "Building triskelion...")
+    log("INFO", "Building quark stack (3 binaries)...")
     cmd = ["cargo", "build", "--release", "-p", "triskelion"]
     ret = subprocess.run(cmd, cwd=SCRIPT_DIR).returncode
     if ret != 0:
         log("ERROR", "Build failed (cargo error)")
         return ret
 
-    # Workspace builds go to <repo>/target/, not <crate>/target/
-    binary = SCRIPT_DIR / "target" / "release" / "triskelion"
-    if not binary.exists():
-        log("ERROR", f"Binary not found: {binary}")
-        return 1
+    target_dir = SCRIPT_DIR / "target" / "release"
 
-    dest = SCRIPT_DIR / "triskelion"
-    shutil.copy2(binary, dest)
-    os.chmod(dest, 0o755)
-    log("INFO", f"Installed: {dest}")
+    for name in ["quark", "triskelion", "parallax"]:
+        binary = target_dir / name
+        if not binary.exists():
+            log("ERROR", f"Binary not found: {binary}")
+            return 1
+        dest = SCRIPT_DIR / name
+        shutil.copy2(binary, dest)
+        os.chmod(dest, 0o755)
 
-    # Deploy to Steam compatibility tools directory
+    # Deploy all three binaries to Steam compatibility tools directory
     STEAM_COMPAT_DIR.mkdir(parents=True, exist_ok=True)
-    triskelion_dest = STEAM_COMPAT_DIR / "triskelion"
+    for name in ["quark", "triskelion", "parallax"]:
+        src = target_dir / name
+        dst = STEAM_COMPAT_DIR / name
+        shutil.copy2(src, dst)
+        os.chmod(dst, 0o755)
+
+    # Steam VDF expects "proton" — symlink to quark (the launcher)
     proton_link = STEAM_COMPAT_DIR / "proton"
-    shutil.copy2(binary, triskelion_dest)
-    os.chmod(triskelion_dest, 0o755)
-    # Steam VDF expects "proton" — symlink it to triskelion so the process
-    # name in /proc is "triskelion", not "proton". montauk --trace needs this.
     if proton_link.exists() or proton_link.is_symlink():
         proton_link.unlink()
-    proton_link.symlink_to("triskelion")
-    log("INFO", f"Deployed to Steam: {triskelion_dest} (proton → symlink)")
+    proton_link.symlink_to("quark")
+    log("INFO", "Deployed: quark, triskelion, parallax (proton -> quark)")
 
     # Write VDF with current version
     version = get_version()
@@ -235,17 +237,17 @@ def build_triskelion():
 {{
   "compat_tools"
   {{
-    "amphetamine"
+    "quark"
     {{
       "install_path" "."
-      "display_name" "amphetamine {version}"
+      "display_name" "quark {version}"
       "from_oslist"  "windows"
       "to_oslist"    "linux"
     }}
   }}
 }}
 ''')
-    log("INFO", f"Updated VDF: amphetamine {version}")
+    log("INFO", f"Updated VDF: quark {version}")
 
     # Write toolmanifest.vdf (required by Steam's compatmanager)
     manifest = STEAM_COMPAT_DIR / "toolmanifest.vdf"
@@ -359,7 +361,7 @@ def patch_server_c():
                 '    /* triskelion_server_init_diag: trace every Wine process init */\n'
                 '    {\n'
                 '        char diagpath[256];\n'
-                '        snprintf( diagpath, sizeof(diagpath), "/tmp/amphetamine/wine_init_%d.log", getpid() );\n'
+                '        snprintf( diagpath, sizeof(diagpath), "/tmp/quark/wine_init_%d.log", getpid() );\n'
                 '        FILE *diag = fopen( diagpath, "w" );\n'
                 '        if (diag)\n'
                 '        {\n'
@@ -544,7 +546,7 @@ def patch_win32u_sysparams():
 
 
 def configure_shader_cache():
-    """Shader cache is now part of .amphetamine_cache. This is a no-op for compat."""
+    """Shader cache is now part of .quark_cache. This is a no-op for compat."""
     pass
 
 
@@ -574,7 +576,7 @@ def configure_custom_env():
     # Fresh install: generate from template
     config_file.write_text(ENV_CONFIG_TEMPLATE)
     log("INFO", f"Custom env config: created ({config_file})")
-    log("INFO", "  Variables you set override amphetamine's built-in defaults")
+    log("INFO", "  Variables you set override quark's built-in defaults")
 
 
 def find_steam_libraries():
@@ -689,7 +691,7 @@ NON_GAME_NAMES = {
 }
 
 
-# ── Unified Binary Cache (.amphetamine_cache) ────────────────────────────────
+# ── Unified Binary Cache (.quark_cache) ────────────────────────────────
 
 OPCODE_COUNT = 306
 CACHE_SIZE = 10_496  # 64 + 128 + 4896 + 4896 + 512
@@ -743,8 +745,8 @@ ENGINE_OPCODE_PROFILES = {
 }
 
 
-def write_amphetamine_cache(cache_path, appid, engine, primary_exe=""):
-    """Write a fresh .amphetamine_cache binary file (10,496 bytes)."""
+def write_quark_cache(cache_path, appid, engine, primary_exe=""):
+    """Write a fresh .quark_cache binary file (10,496 bytes)."""
 
     buf = bytearray(CACHE_SIZE)
     now = int(time.time())
@@ -809,13 +811,13 @@ def write_amphetamine_cache(cache_path, appid, engine, primary_exe=""):
 
 
 def generate_game_intelligence():
-    """Discover installed Steam games and write .amphetamine_cache for amphetamine-mapped ones only.
+    """Discover installed Steam games and write .quark_cache for quark-mapped ones only.
 
-    ONLY touches compatdata for games mapped to amphetamine in Steam's CompatToolMapping.
+    ONLY touches compatdata for games mapped to quark in Steam's CompatToolMapping.
     Never writes into Proton/other compat tool prefixes — their prefix directories are theirs."""
     log("INFO", "Game caches: scanning Steam libraries...")
 
-    amphetamine_appids = _get_amphetamine_appids()
+    quark_appids = _get_quark_appids()
 
     libraries = find_steam_libraries()
     if not libraries:
@@ -854,8 +856,8 @@ def generate_game_intelligence():
         engine = game["engine"]
         engine_counts[engine] = engine_counts.get(engine, 0) + 1
 
-        # ONLY write cache for amphetamine-mapped games — never touch other compat tools' prefixes
-        if game["appid"] not in amphetamine_appids:
+        # ONLY write cache for quark-mapped games — never touch other compat tools' prefixes
+        if game["appid"] not in quark_appids:
             continue
 
         # Resolve compatdata dir for this game
@@ -863,14 +865,14 @@ def generate_game_intelligence():
         if not compatdata.exists():
             continue  # game hasn't been launched yet
 
-        cache_path = compatdata / ".amphetamine_cache"
+        cache_path = compatdata / ".quark_cache"
         if cache_path.exists():
             continue  # don't overwrite learned data
 
-        write_amphetamine_cache(cache_path, game["appid"], engine)
+        write_quark_cache(cache_path, game["appid"], engine)
         created += 1
 
-    log("INFO", f"Game caches: {created} new caches created ({len(games)} games, {len(amphetamine_appids)} mapped to amphetamine)")
+    log("INFO", f"Game caches: {created} new caches created ({len(games)} games, {len(quark_appids)} mapped to quark)")
     for engine, count in sorted(engine_counts.items(), key=lambda x: -x[1]):
         log("INFO", f"  {engine}: {count} game{'s' if count > 1 else ''}")
 
@@ -883,14 +885,14 @@ def require_ntsync():
         major, minor = int(parts[0]), int(parts[1])
     except (ValueError, IndexError):
         log("ERROR", f"ntsync: cannot parse kernel version: {kver}")
-        log("ERROR", "  amphetamine requires Linux 6.14+ for /dev/ntsync")
+        log("ERROR", "  quark requires Linux 6.14+ for /dev/ntsync")
         return False
 
     if major < 6 or (major == 6 and minor < 14):
         log("ERROR", f"ntsync: kernel {kver} too old — requires 6.14+")
         log("ERROR", "  /dev/ntsync provides kernel-native NT sync primitives")
-        log("ERROR", "  amphetamine has zero fallback sync mechanisms")
-        log("ERROR", "  Update your kernel to 6.14+ to use amphetamine")
+        log("ERROR", "  quark has zero fallback sync mechanisms")
+        log("ERROR", "  Update your kernel to 6.14+ to use quark")
         return False
 
     log("INFO", f"ntsync: kernel {kver} — requirement met (6.14+)")
@@ -947,12 +949,12 @@ def deploy_system_wine():
     DXVK/VKD3D DLLs are sourced from Proton at runtime by the launcher.
 
     Two Wine sources:
-    - wine-valve build (~/.cache/amphetamine/wine-valve-build64): protocol 864, NVIDIA xwayland fixes
+    - wine-valve build (~/.cache/quark/wine-valve-build64): protocol 864, NVIDIA xwayland fixes
     - system Wine (/usr/lib/wine): protocol 930
     Default: wine-valve if built, else system Wine."""
 
     # Check for wine-valve build (protocol 864, xwayland + NVIDIA)
-    wine_valve_build = Path.home() / ".cache" / "amphetamine" / "wine-valve-build64"
+    wine_valve_build = Path.home() / ".cache" / "quark" / "wine-valve-build64"
     wine_valve_bin = wine_valve_build / "wine"
     wine_valve_unix = wine_valve_build / "dlls"  # DLLs are under dlls/*/name.so
     use_wine_valve = wine_valve_bin.exists() and (wine_valve_build / "dlls" / "ntdll" / "ntdll.so").exists()
@@ -991,14 +993,11 @@ def deploy_system_wine():
         wine64_link.unlink()
     wine64_link.symlink_to("wine")
 
-    # wineserver → stock. Wine discovers wineserver via bin_dir (computed from
-    # ntdll.so's location). With our wine binary at lib/wine/x86_64-unix/wine,
-    # bin_dir = amphetamine/bin/. We point to stock wineserver here — triskelion
-    # is used as the primary daemon via WINESERVER env var set by the launcher.
     wineserver_link = bin_dir / "wineserver"
     if wineserver_link.exists() or wineserver_link.is_symlink():
         wineserver_link.unlink()
-    wineserver_link.symlink_to("/usr/bin/wineserver")
+    triskelion_bin = STEAM_COMPAT_DIR / "triskelion"
+    wineserver_link.symlink_to(triskelion_bin)
 
     # ── lib/wine/ — hardlink files from system Wine (NOT symlink dirs) ──
     # Wine 11.4's ntdll resolves its own path via realpath(dladdr()).
@@ -1006,7 +1005,7 @@ def deploy_system_wine():
     # ntdll.so to /usr/lib/wine/... and Wine computes bin_dir=/usr/bin,
     # finding /usr/bin/wineserver (stock) instead of our bin/wineserver (triskelion).
     # Hardlinks keep the same inode (zero disk overhead) but realpath resolves
-    # to amphetamine's tree → Wine finds amphetamine/bin/wineserver → triskelion.
+    # to quark's tree → Wine finds quark/bin/wineserver → triskelion.
     wine_lib = STEAM_COMPAT_DIR / "lib" / "wine"
     wine_lib.mkdir(parents=True, exist_ok=True)
 
@@ -1111,7 +1110,7 @@ def deploy_system_wine():
             deployed += 2
         log("INFO", f"wine-valve: deployed {deployed} files over system Wine")
 
-    # ── Patched Wine DLLs — build from source with amphetamine patches ──
+    # ── Patched Wine DLLs — build from source with quark patches ──
     if not use_wine_valve:
         build_and_deploy_patched_wine(wine_lib)
 
@@ -1235,7 +1234,7 @@ def build_and_deploy_patched_wine(wine_lib: Path):
     # Do NOT build it here — the old manual g++ path produced ABI-incompatible .so files.
 
     # Build tier0/vstdlib stubs (needed for steamclient.dll imports)
-        stub_c = Path("/tmp/amphetamine_stub.c")
+        stub_c = Path("/tmp/quark_stub.c")
         stub_c.write_text('#include <windows.h>\nBOOL WINAPI DllMain(HINSTANCE i, DWORD r, void *v) { return TRUE; }\n')
         # 64-bit stubs
         for stub_name in ["tier0_s64", "vstdlib_s64"]:
@@ -1262,8 +1261,8 @@ def build_and_deploy_patched_wine(wine_lib: Path):
         log("WARN", "No patched modules built successfully")
 
 
-def _get_amphetamine_appids():
-    """Read Steam's config.vdf to find which appids use amphetamine as compat tool."""
+def _get_quark_appids():
+    """Read Steam's config.vdf to find which appids use quark as compat tool."""
     config_vdf = Path.home() / ".local/share/Steam/config/config.vdf"
     if not config_vdf.exists():
         return set()
@@ -1289,25 +1288,25 @@ def _get_amphetamine_appids():
                 depth -= 1
             i += 1
         block = content[brace_start + 1:i - 1]
-        pairs = re.findall(r'"(\d+)"\s*\{[^}]*"name"\s*"amphetamine"', block)
+        pairs = re.findall(r'"(\d+)"\s*\{[^}]*"name"\s*"quark"', block)
         return set(pairs)
     except Exception:
         return set()
 
 
 def sync_prefix_dlls():
-    """Sync system Wine DLLs into amphetamine-managed prefix system32 directories.
+    """Sync system Wine DLLs into quark-managed prefix system32 directories.
 
-    ONLY touches prefixes mapped to amphetamine in Steam's CompatToolMapping.
+    ONLY touches prefixes mapped to quark in Steam's CompatToolMapping.
     Proton prefixes are NEVER modified — their DLLs are ABI-incompatible with
     system Wine and overwriting them destroys the prefix.
 
     Triskelion uses system Wine, which REQUIRES matching DLLs.
     This runs once at install time — no per-launch cost.
     """
-    amphetamine_appids = _get_amphetamine_appids()
-    if not amphetamine_appids:
-        log("INFO", "No games mapped to amphetamine — skipping prefix DLL sync")
+    quark_appids = _get_quark_appids()
+    if not quark_appids:
+        log("INFO", "No games mapped to quark — skipping prefix DLL sync")
         return
 
     sys_dlls = Path("/usr/lib/wine/x86_64-windows")
@@ -1334,7 +1333,7 @@ def sync_prefix_dlls():
         appid = entry.name
         if appid in PROTON_APPIDS:
             continue  # Hardcoded safety: never touch Proton runtime prefixes
-        if appid not in amphetamine_appids:
+        if appid not in quark_appids:
             continue
         # Validate prefix is actually under compatdata (paranoia check)
         try:
@@ -1396,13 +1395,13 @@ def sync_prefix_dlls():
                     except OSError:
                         pass
 
-        log("INFO", f"  Prefix {appid} (mapped: amphetamine): synced {copied} DLLs (was {pfx_hash[:8]}, now {sys_hash[:8]})")
+        log("INFO", f"  Prefix {appid} (mapped: quark): synced {copied} DLLs (was {pfx_hash[:8]}, now {sys_hash[:8]})")
         synced_prefixes += 1
 
     if synced_prefixes:
         log("INFO", f"Synced {synced_prefixes} prefix(es) to system Wine DLLs")
     else:
-        log("INFO", "All amphetamine prefixes already match system Wine DLLs")
+        log("INFO", "All quark prefixes already match system Wine DLLs")
 
 
 
@@ -1480,7 +1479,7 @@ def download_dxvk_vkd3d():
 
 
 def deploy_dxvk_vkd3d(dxvk_tar, vkd3d_tar):
-    """Extract DXVK and VKD3D-proton DLLs into amphetamine's lib directory."""
+    """Extract DXVK and VKD3D-proton DLLs into quark's lib directory."""
     lib_dir = STEAM_COMPAT_DIR / "lib"
 
     if dxvk_tar:
@@ -1573,21 +1572,20 @@ def deploy_steam_exe():
 LSTEAMCLIENT_CACHE = DATA_DIR / "lsteamclient"
 PROTON_GIT_URL = "https://github.com/ValveSoftware/Proton.git"
 PROTON_GIT_TAG = "proton-10.0-4"
-WINE_VALVE_SRC = Path.home() / ".cache" / "amphetamine" / "wine-valve"
-PROTON_CACHE = Path.home() / ".cache" / "amphetamine" / "Proton"
+PROTON_CACHE = Path.home() / ".cache" / "quark" / "Proton"
 
 
 def build_lsteamclient():
-    """Build lsteamclient.dll from Proton source against Valve's Wine fork.
+    """Build lsteamclient.dll from Proton source against Wine 11.5.
 
     lsteamclient bridges Windows Steam API calls to the native Linux Steam client.
-    Built as a standard Wine DLL using Wine's build system. No source patches needed
-    against wine-valve — only a one-line configure.ac registration (patch 004).
+    Built as a standard Wine DLL using Wine's build system against wine-src
+    (protocol 930, matching system Wine runtime).
 
     Build steps:
-    1. Get Proton source (cached in ~/.cache/amphetamine/Proton/)
-    2. Symlink lsteamclient/ into wine-valve/dlls/
-    3. Apply configure.ac patch (adds WINE_CONFIG_MAKEFILE entry)
+    1. Get Proton source (cached in ~/.cache/quark/Proton/)
+    2. Symlink lsteamclient/ into wine-src/dlls/
+    3. Register in configure.ac (adds WINE_CONFIG_MAKEFILE entry)
     4. autoconf + configure + make in /tmp
     5. Cache and deploy the built DLL
     """
@@ -1606,11 +1604,6 @@ def build_lsteamclient():
         log("INFO", f"steam.exe: deployed Wine builtin ({steam_cache.stat().st_size // 1024}K)")
         return True
 
-    # Need wine-valve source tree
-    if not WINE_VALVE_SRC.exists():
-        log("WARN", "lsteamclient: wine-valve source not found at ~/.cache/amphetamine/wine-valve")
-        return False
-
     # Need Proton source for lsteamclient
     proton_lsteamclient = PROTON_CACHE / "lsteamclient"
     if not proton_lsteamclient.exists():
@@ -1627,6 +1620,8 @@ def build_lsteamclient():
             return False
         PROTON_CACHE.mkdir(parents=True, exist_ok=True)
         shutil.copytree(tmp_proton / "lsteamclient", proton_lsteamclient)
+        if (tmp_proton / "steam_helper").exists():
+            shutil.copytree(tmp_proton / "steam_helper", PROTON_CACHE / "steam_helper")
         shutil.rmtree(tmp_proton)
         log("INFO", "lsteamclient: Proton source cached")
 
@@ -1675,9 +1670,10 @@ def build_lsteamclient():
             ret = subprocess.run(["patch", "-Np1", "--forward", "-i", str(pfile)],
                            cwd=PROTON_CACHE,
                            capture_output=True, text=True)
+            combined = (ret.stdout or "") + (ret.stderr or "")
             if ret.returncode == 0:
                 log("INFO", f"  Applied: {pname}")
-            elif "already applied" in (ret.stdout or ""):
+            elif "already applied" in combined or "Reversed" in combined:
                 log("INFO", f"  Already applied: {pname}")
             else:
                 log("WARN", f"  Patch failed: {pname}")
@@ -1704,7 +1700,7 @@ def build_lsteamclient():
             configure_ac.write_text(text)
 
     # Build in /tmp
-    build_dir = Path("/tmp/amphetamine-lsteamclient-build")
+    build_dir = Path("/tmp/quark-lsteamclient-build")
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -1788,7 +1784,7 @@ def build_lsteamclient():
 
 
 def _deploy_lsteamclient(dll_path, so_path=None):
-    """Deploy lsteamclient.dll + .so to the amphetamine Wine lib directory."""
+    """Deploy lsteamclient.dll + .so to the quark Wine lib directory."""
     # PE side → x86_64-windows
     win_dir = STEAM_COMPAT_DIR / "lib" / "wine" / "x86_64-windows"
     win_dir.mkdir(parents=True, exist_ok=True)
@@ -2032,7 +2028,7 @@ def configure_verbose():
     if "--verbose" in sys.argv:
         STEAM_COMPAT_DIR.mkdir(parents=True, exist_ok=True)
         flag.write_text("1")
-        log("INFO", "Verbose diagnostics enabled (~/.cache/amphetamine/*.prom)")
+        log("INFO", "Verbose diagnostics enabled (~/.cache/quark/*.prom)")
     elif "--no-verbose" in sys.argv:
         if flag.exists():
             flag.unlink()
@@ -2116,8 +2112,8 @@ def clean_runtime_state():
     These are the ghosts of old runs that cause 'still running old binary' problems."""
     cleaned = []
 
-    # /tmp/amphetamine/ — daemon logs, debug logs, traces, wine_init dumps
-    tmp_dir = Path("/tmp/amphetamine")
+    # /tmp/quark/ — daemon logs, debug logs, traces, wine_init dumps
+    tmp_dir = Path("/tmp/quark")
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
         cleaned.append(str(tmp_dir))
@@ -2148,7 +2144,7 @@ def clean_runtime_state():
 
 
 def detect_old_builds():
-    """Detect existing amphetamine artifacts and offer to clean them before building.
+    """Detect existing quark artifacts and offer to clean them before building.
     When user says yes, EVERYTHING goes. No per-item prompts. Clean slate."""
     found = []
 
@@ -2196,7 +2192,7 @@ def detect_old_builds():
         found.append(("Kernel module", ko_path, ko_path.stat().st_size))
 
     # Runtime state (always present after any run)
-    tmp_dir = Path("/tmp/amphetamine")
+    tmp_dir = Path("/tmp/quark")
     uid = os.getuid()
     wine_sockets = list(Path(f"/tmp/.wine-{uid}").glob("server-*/socket")) if Path(f"/tmp/.wine-{uid}").exists() else []
     shm_segments = list(Path("/dev/shm").glob("triskelion-*"))
@@ -2218,7 +2214,7 @@ def detect_old_builds():
 
     total = sum(size for _, _, size in found)
     print()
-    print("  Existing amphetamine installation detected:")
+    print("  Existing quark installation detected:")
     for label, path, size in found:
         size_str = fmt_size(size) if size else ""
         if isinstance(path, list) or isinstance(path, str):
@@ -2269,7 +2265,7 @@ def detect_old_builds():
 
 
 def deploy_eac_runtime():
-    """Deploy Proton EasyAntiCheat Runtime DLLs into amphetamine's Wine tree.
+    """Deploy Proton EasyAntiCheat Runtime DLLs into quark's Wine tree.
 
     Source: Steam tool 'Proton EasyAntiCheat Runtime' (App ID 1826330).
     Users must install this via Steam Library > Tools.

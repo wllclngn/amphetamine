@@ -1,4 +1,4 @@
-From: amphetamine <amphetamine@triskelion>
+From: quark <quark@triskelion>
 Subject: lsteamclient: link libstdc++ for Unix .so
 
 Upstream Wine doesn't auto-link libstdc++ for C++ unix libs.

@@ -1,4 +1,4 @@
-From: amphetamine <amphetamine@localhost>
+From: quark <quark@localhost>
 Subject: [PATCH] ntdll: Export __wine_unix_call as PE-callable stdcall function
 
 Port wine-valve's compat___wine_unix_call export. This exposes

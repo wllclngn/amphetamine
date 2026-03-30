@@ -2,7 +2,7 @@
 // Uses libc::localtime_r for local time without pulling in chrono.
 //
 // Metrics output (timing, opcode stats, per-thread init) is gated behind
-// AMPHETAMINE_VERBOSE=1.  Use log_verbose!() for these.
+// QUARK_VERBOSE=1.  Use log_verbose!() for these.
 
 use std::sync::OnceLock;
 
@@ -10,8 +10,8 @@ static VERBOSE: OnceLock<bool> = OnceLock::new();
 
 pub fn is_verbose() -> bool {
     *VERBOSE.get_or_init(|| {
-        // Environment variable (Steam launch options: AMPHETAMINE_VERBOSE=1 %command%)
-        if std::env::var("AMPHETAMINE_VERBOSE").is_ok() {
+        // Environment variable (Steam launch options: QUARK_VERBOSE=1 %command%)
+        if std::env::var("QUARK_VERBOSE").is_ok() {
             return true;
         }
         // Flag file written by ./install.py --verbose
@@ -44,6 +44,7 @@ pub fn timestamp() -> [u8; 10] {
     buf
 }
 
+#[macro_export]
 macro_rules! log_info {
     ($($arg:tt)*) => {{
         let ts = $crate::log::timestamp();
@@ -52,6 +53,7 @@ macro_rules! log_info {
     }};
 }
 
+#[macro_export]
 macro_rules! log_warn {
     ($($arg:tt)*) => {{
         let ts = $crate::log::timestamp();
@@ -60,6 +62,7 @@ macro_rules! log_warn {
     }};
 }
 
+#[macro_export]
 macro_rules! log_error {
     ($($arg:tt)*) => {{
         let ts = $crate::log::timestamp();
@@ -68,6 +71,7 @@ macro_rules! log_error {
     }};
 }
 
+#[macro_export]
 macro_rules! log_verbose {
     ($($arg:tt)*) => {{
         if $crate::log::is_verbose() {
@@ -80,15 +84,6 @@ macro_rules! log_verbose {
 
 // trace! macro removed — montauk --trace handles per-request diagnostics now.
 
-#[allow(unused_imports)]
-pub(crate) use log_info;
-#[allow(unused_imports)]
-pub(crate) use log_warn;
-#[allow(unused_imports)]
-pub(crate) use log_error;
-#[allow(unused_imports)]
-pub(crate) use log_verbose;
-#[allow(unused_imports)]
 
 pub fn format_with_commas(n: u64) -> String {
     let s = n.to_string();
@@ -106,10 +101,10 @@ pub fn format_with_commas(n: u64) -> String {
 // Prometheus text exposition format writer
 // ---------------------------------------------------------------------------
 
-/// Resolve the log directory: ~/.cache/amphetamine/
+/// Resolve the log directory: ~/.cache/quark/
 pub fn log_dir() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    std::path::PathBuf::from(home).join(".cache").join("amphetamine")
+    std::path::PathBuf::from(home).join(".cache").join("quark")
 }
 
 

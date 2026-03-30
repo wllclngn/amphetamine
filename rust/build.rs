@@ -13,7 +13,7 @@
 //
 // Wine source resolution order:
 //   1. WINE_SRC env var
-//   2. ~/.local/share/amphetamine/wine-src/
+//   2. ~/.local/share/quark/wine-src/
 //   3. /tmp/proton-wine/
 //
 // If no Wine source found, uses src/protocol_generated.rs.fallback.
@@ -182,7 +182,7 @@ fn find_wine_src() -> Option<PathBuf> {
             .map(|h| {
                 h.join(".local")
                     .join("share")
-                    .join("amphetamine")
+                    .join("quark")
                     .join("wine-src")
             })
             .unwrap_or_default(),
@@ -618,13 +618,15 @@ fn scan_implemented_handlers(manifest_dir: &str) -> HashSet<String> {
     if flat.exists() {
         files_to_scan.push(flat);
     }
-    let dir = src.join("event_loop");
-    if dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.extension().map(|e| e == "rs").unwrap_or(false) {
-                    files_to_scan.push(p);
+    for subdir in ["event_loop", "triskelion/event_loop"] {
+        let dir = src.join(subdir);
+        if dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.extension().map(|e| e == "rs").unwrap_or(false) {
+                        files_to_scan.push(p);
+                    }
                 }
             }
         }

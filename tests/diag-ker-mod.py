@@ -21,7 +21,7 @@ import fcntl, array, errno
 # ── Constants ──────────────────────────────────────────────────────────
 
 DEVICE = "/dev/triskelion"
-COMPAT_DIR = os.path.expanduser("~/.local/share/Steam/compatibilitytools.d/amphetamine")
+COMPAT_DIR = os.path.expanduser("~/.local/share/Steam/compatibilitytools.d/quark")
 PROTON = os.path.join(COMPAT_DIR, "proton")
 STEAM_DIR = os.path.expanduser("~/.local/share/Steam")
 DIAG_TIMEOUT = 8
@@ -430,8 +430,8 @@ def test_relay():
 # ── Game launch diagnostics (carried forward from original) ────────────
 
 def kill_stale():
-    for pat in ["compatibilitytools.d/amphetamine/proton",
-                "amphetamine/lib/wine"]:
+    for pat in ["compatibilitytools.d/quark/proton",
+                "quark/lib/wine"]:
         subprocess.run(["pkill", "-9", "-f", pat], capture_output=True)
     time.sleep(0.5)
 
@@ -472,14 +472,14 @@ def find_procs():
     result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
     procs = {}
     for line in result.stdout.splitlines():
-        if "amphetamine/proton" in line and "grep" not in line:
+        if "quark/proton" in line and "grep" not in line:
             parts = line.split()
             pid = int(parts[1])
             if "waitforexitandrun" in line:
                 procs[pid] = ("launcher", line)
             else:
                 procs[pid] = ("server", line)
-        elif "amphetamine/lib/wine" in line and "grep" not in line:
+        elif "quark/lib/wine" in line and "grep" not in line:
             parts = line.split()
             pid = int(parts[1])
             procs[pid] = ("wine", line)
@@ -608,7 +608,7 @@ exec "{PROTON}" "$@"
         stderr_data = b""
 
     # Cached stderr log
-    stderr_logs = sorted(glob.glob(os.path.expanduser("~/.cache/amphetamine/stderr-*.log")))
+    stderr_logs = sorted(glob.glob(os.path.expanduser("~/.cache/quark/stderr-*.log")))
     cached_stderr = ""
     if stderr_logs:
         try:
